@@ -1,0 +1,27 @@
+{
+  "name": "fastmemo-server",
+  "version": "1.0.0",
+  "description": "Self-hosted sync server for FastMemo: end-to-end encrypted notes, live sync between devices, ops dashboard.",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/main.ts",
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/main.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"public/**/*.{js,css,html}\" \"*.md\" \"docs/**/*.md\"",
+    "test:pg": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 test/*.test.ts"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
+    "typescript": "^6.0.3"
+  }
+}
