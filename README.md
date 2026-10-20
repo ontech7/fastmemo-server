@@ -1,12 +1,89 @@
+<div align="center">
+
+<img width="600" height="114" alt="FastMemo" src="https://github.com/user-attachments/assets/2b91e421-2c6b-4739-bb16-1220bd591667" />
+
 # FastMemo Server
 
-Your own sync server for [FastMemo](https://fastmemo.vercel.app). Run it on a PC, a NAS, a Raspberry Pi or a VPS, and your
-devices sync their notes through it, live, without anyone else's cloud. Notes are encrypted on your devices, so the server only
-stores data it can't read (titles are the exception: see [Security](#security)). One Docker container, one database file, and a
-dashboard in your browser.
+**Your own sync server for FastMemo: end-to-end encrypted notes, live sync between your devices, and a dashboard. One Docker
+container.**
+
+![Docker](https://badgen.net/badge/Docker/amd64%20%C2%B7%20arm64/blue)
+![Database](https://badgen.net/badge/Database/SQLite%20%C2%B7%20PostgreSQL/blue)
+![Protocol](https://badgen.net/badge/Protocol/v1/blue) ![License](https://badgen.net/badge/License/AGPL-3.0/grey)
+
+[Quick start](#quick-start) | [Deployment guide](docs/DEPLOYMENT.md) | [Protocol](docs/PROTOCOL.md) |
+[Report Bug](https://github.com/ontech7/fastmemo-server/issues)
+
+---
+
+If you find this project useful, consider [buying me a coffee](https://www.buymeacoffee.com/ontech7)! ☕
+
+<img width="1280" alt="The FastMemo Server dashboard: notes, devices, operations per day" src="docs/images/dashboard.png" />
+
+</div>
+
+Run it on a PC, a NAS, a Raspberry Pi or a VPS, and your [FastMemo](https://fastmemo.vercel.app) devices sync their notes
+through it, live, without anyone else's cloud. Notes are encrypted on your devices, so the server only stores data it can't read
+(titles are the exception: see [Security](#security)). One Docker container, one database file, and a dashboard in your browser.
 
 Rather not run a server? FastMemo also syncs through your own Firebase project: see the
 [Firebase guide](https://fastmemo.vercel.app/en/guides/google-firebase/).
+
+## Table of Contents
+
+- [How it works](#how-it-works)
+- [Quick start](#quick-start)
+- [Connect the app](#connect-the-app)
+- [HTTPS](#https)
+- [Other setups](#other-setups)
+- [Configuration](#configuration)
+- [Backups and restore](#backups-and-restore)
+- [Updating](#updating)
+- [Security](#security)
+- [Development](#development)
+
+## How it works
+
+```mermaid
+flowchart LR
+  subgraph devices["FastMemo app"]
+    phone["Android"]
+    desktop["Desktop<br/>macOS · Windows · Linux"]
+    web["Web app"]
+  end
+  browser["A browser<br/>(you, with the admin key)"]
+
+  subgraph host["Your PC, NAS, Pi or VPS"]
+    https["HTTPS<br/>Tailscale · Caddy · Coolify"]
+    server["fastmemo-server<br/>sync API + dashboard<br/>(one Docker container)"]
+    db[("SQLite file<br/>or PostgreSQL")]
+  end
+
+  phone & desktop & web -- "encrypted notes" --> https
+  browser -- "admin key" --> https
+  https --> server --> db
+```
+
+Notes are encrypted on your devices before they leave them: the server stores and forwards data it can't read. A device joins
+with the **access key** and gets its own token. Every change gets the next number; each device remembers the last one it applied
+and waits for the next with a long poll, so an edit reaches the other devices in about a second:
+
+```mermaid
+sequenceDiagram
+  participant P as Phone
+  participant S as fastmemo-server
+  participant L as Laptop
+  L->>S: GET /v1/sync (long poll: waits for a change)
+  P->>P: edit a note, encrypt it
+  P->>S: POST /v1/push
+  S->>S: same rules as the Firebase sync, next change number
+  S-->>P: committed
+  S-->>L: the long poll answers with the change
+  L->>L: decrypt it, apply it
+  L->>S: POST /v1/ack (done up to this change)
+```
+
+More in [How sync works](docs/DEPLOYMENT.md#how-sync-works); the API is in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Quick start
 
