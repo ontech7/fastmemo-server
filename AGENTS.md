@@ -54,6 +54,8 @@ docs/           -> PROTOCOL.md
    devices can see.
 4. **Always count operations** in `stats` (reads, writes, deletes) the way Firestore would bill them.
 5. **Always keep the README's ELI5 tone**: steps a non-developer can follow, every command tested.
+6. **Always give a test that starts its own server its own `describe`**: on Postgres the tests share one database, which every
+   new test server empties (a server started inside another suite wipes that suite's data).
 
 ## Commands
 
