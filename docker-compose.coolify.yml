@@ -1,0 +1,25 @@
+# FastMemo Server on Coolify (Docker Compose build pack, "Docker Compose Location": /docker-compose.coolify.yml).
+#
+# No published port: Coolify's proxy serves your domain over HTTPS and forwards to port 8787 in the container. Set the
+# domain in Coolify as https://notes.example.com:8787 (the :8787 is the container's port, people still use 443).
+# Coolify generates both keys on the first deploy: find them under Environment Variables.
+services:
+  fastmemo:
+    build: .
+    restart: unless-stopped
+    environment:
+      SERVICE_URL_FASTMEMO_8787: /
+      FASTMEMO_ACCESS_KEY: ${SERVICE_PASSWORD_64_ACCESSKEY}
+      FASTMEMO_ADMIN_KEY: ${SERVICE_PASSWORD_64_ADMINKEY}
+      TRUST_PROXY: "true"
+      TZ: ${TZ:-Europe/Rome}
+      MAX_DEVICES: ${MAX_DEVICES:-10}
+      MAX_NOTE_MB: ${MAX_NOTE_MB:-5}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PORT: "8787"
+      DATA_DIR: /data
+    volumes:
+      - fastmemo-data:/data
+
+volumes:
+  fastmemo-data:

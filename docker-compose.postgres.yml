@@ -1,0 +1,41 @@
+# FastMemo Server with PostgreSQL, for who already runs Postgres or prefers it. SQLite (docker-compose.yml) is enough
+# for a person or a family: choose this one only if you have a reason to.
+#
+#   cp .env.example .env      # set POSTGRES_PASSWORD (letters and digits) and FASTMEMO_ACCESS_KEY
+#   docker compose -f docker-compose.postgres.yml up -d
+services:
+  fastmemo:
+    build: .
+    image: fastmemo-server:local
+    container_name: fastmemo-server
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8787}:8787"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: "8787"
+      DATABASE_URL: postgres://fastmemo:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/fastmemo
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: fastmemo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fastmemo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: fastmemo
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fastmemo -d fastmemo"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  postgres-data:

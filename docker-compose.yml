@@ -1,0 +1,27 @@
+# FastMemo Server with SQLite: the simplest setup (PC, NAS, Raspberry Pi, VPS).
+#
+#   cp .env.example .env      # then set FASTMEMO_ACCESS_KEY (or leave it empty: one is generated, see the logs)
+#   docker compose up -d
+#   docker compose logs fastmemo
+#
+# The app connects to http://<this computer's address>:8787 and the dashboard is at the same address.
+services:
+  fastmemo:
+    build: .
+    image: fastmemo-server:local
+    container_name: fastmemo-server
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8787}:8787"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Inside the container: always this port and this folder (PORT above is the one on your computer).
+      PORT: "8787"
+      DATA_DIR: /data
+    volumes:
+      - fastmemo-data:/data
+
+volumes:
+  fastmemo-data:

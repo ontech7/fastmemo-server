@@ -71,7 +71,8 @@ const main = async () => {
       [
         "",
         "  No FASTMEMO_ACCESS_KEY is set: this server generated one (it stays the same across restarts).",
-        "  Enter it in the app (Settings > Cloud > FastMemo Server) to connect a device:",
+        "  Enter it in the app (Settings > Cloud Sync > FastMemo Server) to connect a device, and to open the dashboard",
+        "  (this server's address in a browser):",
         "",
         `      ${accessKey}`,
         "",

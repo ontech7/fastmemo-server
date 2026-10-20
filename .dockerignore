@@ -8,3 +8,10 @@ docs
 *.db-wal
 *.db-shm
 .DS_Store
+.github
+Dockerfile
+docker-compose*.yml
+.env.example
+*.md
+.prettierrc.json
+tsconfig.json
