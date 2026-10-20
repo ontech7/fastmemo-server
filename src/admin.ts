@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { Route } from "./http.ts";
 import { HttpError } from "./model.ts";
 import type { Service } from "./service.ts";
-import type { Stats } from "./stats.ts";
+import { dayOf, type Stats } from "./stats.ts";
 import type { Database } from "./store/db.ts";
 
 /*
@@ -126,7 +126,8 @@ export const adminRoutes = (ctx: AdminContext): Route[] => {
         try {
           await ctx.db.backup(file);
           const body = fs.readFileSync(file);
-          const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
+          const now = new Date();
+          const stamp = `${dayOf(now.getTime()).replace(/-/g, "")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
           return {
             body,
             type: "application/octet-stream",

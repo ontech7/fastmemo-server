@@ -1,2 +1,115 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>FastMemo Server</title></head><body></body></html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="robots" content="noindex" />
+    <title>FastMemo Server</title>
+    <link rel="icon" href="/assets/favicon.png" />
+    <link rel="stylesheet" href="/assets/style.css" />
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body>
+    <main id="login" class="login" hidden>
+      <form id="login-form" class="card login-card">
+        <img src="/assets/favicon.png" alt="" class="login-logo" width="48" height="48" />
+        <h1>FastMemo Server</h1>
+        <p class="muted">
+          Enter the admin key to open the dashboard (FASTMEMO_ADMIN_KEY, or the access key when that isn't set).
+        </p>
+        <label for="key">Admin key</label>
+        <input id="key" name="key" type="password" autocomplete="current-password" required autofocus spellcheck="false" />
+        <p id="login-error" class="error" role="alert" hidden></p>
+        <button type="submit" class="primary">Open</button>
+      </form>
+    </main>
+
+    <div id="app" hidden>
+      <header class="topbar">
+        <div class="brand">
+          <img src="/assets/favicon.png" alt="" width="28" height="28" />
+          <div>
+            <h1>FastMemo Server</h1>
+            <p class="muted small" id="server-line"></p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span id="status" class="status"><span class="dot"></span><span id="status-text">Online</span></span>
+          <button id="refresh" class="ghost" type="button">Refresh</button>
+          <button id="logout" class="ghost" type="button">Log out</button>
+        </div>
+      </header>
+
+      <section class="cards" id="cards" aria-label="Summary"></section>
+
+      <section class="card">
+        <div class="section-head">
+          <h2>Operations, last 30 days</h2>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div id="chart" class="chart" role="img" aria-label="Reads, writes and deletes per day"></div>
+        <div class="totals" id="totals"></div>
+        <p class="muted small chart-note">
+          Counted like Firestore's: deleting a note leaves a small marker so the other devices learn about it (a write); deletes
+          are rows removed for good (wipes, removed devices, old markers dropped by the daily cleanup).
+        </p>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <h2>Devices</h2>
+          <button id="full-sync-all" class="ghost" type="button">Ask every device for a full sync</button>
+        </div>
+        <p class="muted small">
+          "Behind" counts the changes a device hasn't pulled yet. A full sync makes a device compare all its notes with the
+          server's (useful after restoring a backup).
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Device</th>
+                <th>Last sync</th>
+                <th>Last seen</th>
+                <th>Open note</th>
+                <th>Behind</th>
+                <th><span class="visually-hidden">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="devices"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="grid-2">
+        <div class="card">
+          <div class="section-head">
+            <h2>Backup</h2>
+          </div>
+          <p class="muted small" id="backup-text"></p>
+          <button id="backup" class="primary" type="button">Download a backup</button>
+        </div>
+        <div class="card">
+          <div class="section-head">
+            <h2>Server</h2>
+          </div>
+          <dl class="facts" id="facts"></dl>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <h2>Recent warnings and errors</h2>
+        </div>
+        <ul id="events" class="events"></ul>
+      </section>
+
+      <footer class="muted small footer">
+        Notes are end-to-end encrypted on your devices: this server stores them, it can't read them.
+      </footer>
+    </div>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+  </body>
+</html>
