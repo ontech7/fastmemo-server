@@ -39,23 +39,34 @@ describe("vault and data", () => {
     await s.call("POST", "/v1/push", { token: a, body: ops({ add: [note("n1", 10), note("n2", 10), note("n3", 10)] }) });
     await s.call("POST", "/v1/push", { token: a, body: ops({ delete: [stub("n3", 20)] }) });
     const all = (await s.call("GET", "/v1/notes", { token: b })).body;
-    assert.deepEqual(all.map((n: any) => n.id).sort(), ["n1", "n2"]);
+    assert.deepEqual(all.notes.map((n: any) => n.id).sort(), ["n1", "n2"]);
+    assert.equal(all.next, null);
     assert.equal((await s.call("GET", "/v1/notes/n1", { token: b })).body.id, "n1");
     assert.equal((await s.call("GET", "/v1/notes/n3", { token: b })).status, 404);
     assert.equal((await s.call("GET", "/v1/notes/nope", { token: b })).status, 404);
   });
 
-  test("tombstones: listed, pruned by id (a live note is never pruned)", async () => {
+  test("tombstones: listed; pruned by id only once every device has read them and they're old (never a live note)", async () => {
     await s.call("POST", "/v1/push", { token: a, body: ops({ detach: [stub("t2", 30)] }) });
-    assert.deepEqual((await s.call("GET", "/v1/tombstones", { token: b })).body, {
-      n3: { rev: 20 },
-      t2: { rev: 30, detach: true },
-    });
-    const pruned = await s.call("POST", "/v1/tombstones/prune", { token: b, body: { ids: ["n3", "n1"] } });
-    assert.equal(pruned.body.removed, 1);
-    assert.deepEqual((await s.call("GET", "/v1/tombstones", { token: b })).body, { t2: { rev: 30, detach: true } });
+    await s.call("POST", "/v1/push", { token: a, body: ops({ delete: [stub("t3", Date.now())] }) });
+    const listed = (await s.call("GET", "/v1/tombstones", { token: b })).body;
+    assert.deepEqual(Object.keys(listed).sort(), ["n3", "t2", "t3"]);
+    assert.deepEqual(listed.t2, { rev: 30, detach: true });
+
+    const prune = (ids: unknown) => s.call("POST", "/v1/tombstones/prune", { token: b, body: { ids } });
+    // Here a marker is the feed entry: one a device hasn't read yet would leave it with the note, to upload it again.
+    assert.equal((await prune(["n3", "n1", "t3"])).body.removed, 0, "B hasn't read the deletions yet");
+    for (const token of [a, b]) {
+      for (;;) {
+        const change = (await s.call("GET", "/v1/sync", { token })).body.change;
+        if (!change) break;
+        await s.call("POST", "/v1/ack", { token, body: { token: change.token } });
+      }
+    }
+    assert.equal((await prune(["n3", "n1", "t3"])).body.removed, 1, "read by everyone and old: n3 goes; t3 is recent");
+    assert.deepEqual(Object.keys((await s.call("GET", "/v1/tombstones", { token: b })).body).sort(), ["t2", "t3"]);
     assert.equal((await s.call("GET", "/v1/notes/n1", { token: b })).status, 200);
-    assert.equal((await s.call("POST", "/v1/tombstones/prune", { token: b, body: { ids: "n3" } })).status, 400);
+    assert.equal((await prune("n3")).status, 400);
   });
 
   test("import writes notes as they are, unguarded (the app's vault migration)", async () => {
@@ -72,7 +83,7 @@ describe("vault and data", () => {
 
   test("wipe: every note and tombstone goes", async () => {
     assert.equal((await s.call("DELETE", "/v1/notes", { token: a })).status, 204);
-    assert.deepEqual((await s.call("GET", "/v1/notes", { token: a })).body, []);
+    assert.deepEqual((await s.call("GET", "/v1/notes", { token: a })).body, { notes: [], next: null });
     assert.deepEqual((await s.call("GET", "/v1/tombstones", { token: a })).body, {});
   });
 
@@ -90,5 +101,53 @@ describe("vault and data", () => {
     assert.equal((await s.call("POST", "/v1/categories/reset", { token: a, body: { category: fallback } })).status, 204);
     assert.deepEqual((await s.call("GET", "/v1/categories", { token: a })).body, [fallback]);
     assert.equal((await s.call("POST", "/v1/categories/reset", { token: a, body: { category: { name: "x" } } })).status, 400);
+  });
+});
+
+/** Its own server (and database: on Postgres the tests share one, emptied by each new server). */
+describe("notes in pages", () => {
+  test("notes come in pages (by count and by size); a note changed between two pages comes again, newer", async () => {
+    const fresh = await startServer({ maxNoteBytes: 4 * 1024 * 1024, maxBodyBytes: 32 * 1024 * 1024 });
+    try {
+      const t = await fresh.register("P");
+      const many = Array.from({ length: 1100 }, (_, i) => note(`p-${i}`, 10));
+      for (let i = 0; i < many.length; i += 300) {
+        await fresh.call("POST", "/v1/push", { token: t, body: ops({ add: many.slice(i, i + 300) }) });
+      }
+      const big = (id: string) => note(id, 10, { text: "x".repeat(3 * 1024 * 1024) });
+      await fresh.call("POST", "/v1/push", { token: t, body: ops({ add: [big("big-1"), big("big-2"), big("big-3")] }) });
+
+      const pages: number[] = [];
+      const seen = new Map<string, number>();
+      let after: string | null = "0";
+      let rewritten = false;
+      while (after !== null) {
+        const page: { notes: any[]; next: string | null } = (await fresh.call("GET", `/v1/notes?after=${after}`, { token: t }))
+          .body;
+        pages.push(page.notes.length);
+        for (const n of page.notes) seen.set(n.id, n.rev);
+        after = page.next;
+        if (!rewritten) {
+          // p-0 was in the first page: changed now, it comes again at the end.
+          await fresh.call("POST", "/v1/push", { token: t, body: ops({ add: [note("p-0", 20)], bases: { "p-0": 10 } }) });
+          rewritten = true;
+        }
+      }
+      assert.deepEqual(pages, [500, 500, 102, 2], "500 at most, ~8 MB at most (100 small + 2 x 3 MB), the rest");
+      assert.equal(seen.size, 1103);
+      assert.equal(seen.get("p-0"), 20);
+      assert.equal((await fresh.call("GET", "/v1/notes?after=-1", { token: t })).status, 400);
+
+      const small = (await fresh.call("GET", "/v1/notes?after=0&bytes=1", { token: t })).body;
+      assert.equal(small.notes.length, 1, "a smaller page when asked (still one note at least)");
+      assert.notEqual(small.next, null, "...and the rest after it");
+      const huge = (await fresh.call("GET", `/v1/notes?after=0&bytes=${64 * 1024 * 1024}`, { token: t })).body;
+      assert.equal(huge.notes.length, 500, "never larger than the server's own size");
+      for (const bad of ["0", "-5", "1.5", "lots"]) {
+        assert.equal((await fresh.call("GET", `/v1/notes?after=0&bytes=${bad}`, { token: t })).status, 400, bad);
+      }
+    } finally {
+      await fresh.close();
+    }
   });
 });

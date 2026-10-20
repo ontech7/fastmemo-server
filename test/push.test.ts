@@ -124,6 +124,13 @@ describe("push", () => {
     assert.equal((await push(a, { notes: { add: "x" }, categories: {} } as object)).status, 400);
   });
 
+  test("a revision that isn't a millisecond timestamp is refused for good, alone", async () => {
+    const res = await push(a, ops({ add: [note("huge", 1e300), note("fine", 10)], delete: [stub("neg", -5)] }));
+    assert.deepEqual(res.body.rejected.sort(), ["addNotes:huge", "deleteNotes:neg"]);
+    assert.deepEqual(res.body.committed.notes.add, ["fine"]);
+    assert.equal((await s.call("GET", "/v1/notes/huge", { token: a })).status, 404);
+  });
+
   test("an empty push writes nothing", async () => {
     const before = await seq();
     const res = await push(a, ops());
@@ -150,7 +157,7 @@ describe("push", () => {
       Array.from({ length: 20 }, (_, i) => push(i % 2 ? a : b, ops({ add: [note(`par-${i}`, 10), note(`par-${i}-b`, 10)] })))
     );
     assert.equal(await seq(), start + 40);
-    const ids = (await s.call("GET", "/v1/notes", { token: a })).body.map((n: any) => n.id);
+    const ids = (await s.call("GET", "/v1/notes", { token: a })).body.notes.map((n: any) => n.id);
     for (let i = 0; i < 20; i++) assert.ok(ids.includes(`par-${i}`) && ids.includes(`par-${i}-b`));
   });
 });

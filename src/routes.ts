@@ -153,7 +153,21 @@ export const apiRoutes = (service: Service, info: ServerInfo): Route[] => [
   },
 
   // --- Data ---
-  { method: "GET", pattern: /^\/v1\/notes$/, auth: "member", handler: async () => ({ rawJson: await service.notesJson() }) },
+  {
+    method: "GET",
+    pattern: /^\/v1\/notes$/,
+    auth: "member",
+    handler: async (req) => {
+      const after = Number(req.query.get("after") ?? 0);
+      if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, "bad_request", "after must be a sequence number");
+      // Optional: a client on a slow link asks for smaller pages (the server's size is the most it gets).
+      const bytes = req.query.has("bytes") ? Number(req.query.get("bytes")) : undefined;
+      if (bytes !== undefined && (!Number.isSafeInteger(bytes) || bytes < 1)) {
+        throw new HttpError(400, "bad_request", "bytes must be a positive size");
+      }
+      return { rawJson: await service.notesPage(after, bytes) };
+    },
+  },
   {
     method: "GET",
     pattern: /^\/v1\/notes\/([^/]+)$/,

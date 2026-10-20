@@ -70,6 +70,8 @@ export interface DeviceInfo {
 /** A page of the feed is cut at whichever comes first. */
 const PAGE_ROWS = 500;
 const PAGE_BYTES = 2 * 1024 * 1024;
+/** GET /v1/notes pages: bounded, so a server full of large notes never builds one huge reply (or runs out of memory). */
+const NOTES_PAGE_BYTES = 8 * 1024 * 1024;
 const MAX_VAULT_BYTES = 256 * 1024;
 const MAX_PRESENCE_BYTES = 1024;
 /** A deleted category's row is dropped once every device has it, after this long. */
@@ -123,7 +125,10 @@ export class Service {
   private readonly seen = new Map<string, number>();
   private events: LogRecord[] = [];
   /** The device list as of a hub version (every device's snapshot carries it). */
-  private viewCache: { version: string; devices: DeviceView[] } | null = null;
+  /** One read per hub version, shared by every request that needs it meanwhile. */
+  private viewCache: { version: string; devices: Promise<DeviceView[]> } | null = null;
+  /** Bumped when a device's tokens stop working: a lookup that started before can't cache a revoked token. */
+  private revocations = 0;
 
   constructor(db: Database, hub: Hub, stats: Stats, limits: Limits) {
     this.db = db;
@@ -148,10 +153,13 @@ export class Service {
   async deviceForToken(token: string): Promise<string | null> {
     const hash = hashToken(token);
     let uuid = this.tokens.get(hash) ?? null;
-    if (!uuid) {
+    while (!uuid) {
+      const epoch = this.revocations;
       const row = await this.db.read((sql) =>
         sql.get<{ uuid: string }>(`SELECT uuid FROM devices WHERE token_hash = ?`, [hash])
       );
+      // A device was removed or registered again meanwhile (on Postgres, reads don't wait for writes): read again.
+      if (epoch !== this.revocations) continue;
       if (!row) return null;
       uuid = row.uuid;
       this.tokens.set(hash, uuid);
@@ -161,6 +169,7 @@ export class Service {
   }
 
   private forgetTokens(uuid: string): void {
+    this.revocations++;
     for (const [hash, owner] of this.tokens) if (owner === uuid) this.tokens.delete(hash);
   }
 
@@ -208,11 +217,18 @@ export class Service {
 
   async listDevices(): Promise<DeviceView[]> {
     const version = this.hub.version();
-    if (this.viewCache?.version === version) return this.viewCache.devices;
-    const devices = await this.db.read((sql) => devicesView(sql));
-    this.viewCache = { version, devices };
-    this.stats.count("reads", devices.length);
-    return devices;
+    if (this.viewCache?.version !== version) {
+      const devices = this.db.read((sql) => devicesView(sql));
+      const entry = { version, devices };
+      this.viewCache = entry;
+      devices.then(
+        (list) => this.stats.count("reads", list.length),
+        () => {
+          if (this.viewCache === entry) this.viewCache = null;
+        }
+      );
+    }
+    return this.viewCache!.devices;
   }
 
   private async updateDevice(uuid: string, assignments: string, params: Param[]): Promise<boolean> {
@@ -323,6 +339,10 @@ export class Service {
     const now = Date.now();
 
     await this.db.write(async (sql) => {
+      // Removed meanwhile: nothing it sends counts anymore (as on Firestore, where its device doc is gone).
+      if (!(await sql.get(`SELECT 1 AS found FROM devices WHERE uuid = ?`, [me]))) {
+        throw new HttpError(401, "device_unknown", "This device isn't registered on the server (anymore)");
+      }
       const write = async (kind: ItemKind, key: string, state: ItemState, rev: number, data: string) => {
         const seq = await nextSeq(sql);
         await sql.run(
@@ -343,6 +363,10 @@ export class Service {
           continue;
         }
         const rev = noteRev(note);
+        if (!validRev(rev)) {
+          result.rejected.push(`addNotes:${key}`);
+          continue;
+        }
         const current = await getItem(sql, "note", key);
         if (current?.state === "live") {
           const base = ops.bases[key];
@@ -364,6 +388,10 @@ export class Service {
           const key = stub.id as string;
           const data = JSON.stringify(stub);
           const rev = noteRev(stub);
+          if (!validRev(rev)) {
+            result.rejected.push(`${queueOf("note", state)}:${key}`);
+            continue;
+          }
           const current = await getItem(sql, "note", key);
           if (state === "deleted" && current?.state === "live" && Number(current.rev) > rev) {
             result.superseded.push(JSON.parse(current.data));
@@ -452,13 +480,24 @@ export class Service {
 
   // --- Data ---
 
-  /** Every note (encrypted), as a JSON array. */
-  async notesJson(): Promise<string> {
-    const rows = await this.db.read((sql) =>
-      sql.all<{ data: string }>(`SELECT data FROM items WHERE kind = 'note' AND state = 'live' ORDER BY seq`)
-    );
+  /**
+   * One page of the live notes (encrypted JSON) changed after `after` (a seq), as `{ notes, next }`: `next` continues,
+   * null at the end. A note changed between two pages comes again in a later one, newer. `maxBytes` makes pages smaller
+   * (a slow link), never larger.
+   */
+  async notesPage(after: number, maxBytes = NOTES_PAGE_BYTES): Promise<string> {
+    const { rows, next } = await this.db.read(async (sql) => {
+      const where = `kind = 'note' AND state = 'live' AND seq > ?`;
+      const cut = await pageCut(sql, where, [after], Math.min(maxBytes, NOTES_PAGE_BYTES));
+      if (!cut) return { rows: [] as { data: string }[], next: null };
+      const rows = await sql.all<{ data: string }>(`SELECT data FROM items WHERE ${where} AND seq <= ? ORDER BY seq`, [
+        after,
+        cut.last,
+      ]);
+      return { rows, next: cut.more ? String(cut.last) : null };
+    });
     this.stats.count("reads", rows.length);
-    return `[${rows.map((row) => row.data).join(",")}]`;
+    return `{"notes":[${rows.map((row) => row.data).join(",")}],"next":${JSON.stringify(next)}}`;
   }
 
   /** One note (encrypted JSON), or null when there's none. */
@@ -480,17 +519,24 @@ export class Service {
     );
   }
 
+  /**
+   * Drops deletion markers the app found expired, under the same rules as the hourly maintenance: here a marker is also
+   * the feed entry that tells the other devices, so one a device hasn't read yet stays (or that device would keep the note
+   * and bring it back on its next full sync), and so does one written again since the app listed it.
+   */
   async pruneTombstones(ids: unknown): Promise<number> {
     if (!Array.isArray(ids) || !ids.every(isKey)) throw new HttpError(400, "bad_request", "ids must be a list of note ids");
     let removed = 0;
-    await this.db.write((sql) =>
-      inChunks(ids, 500, async (chunk) => {
+    const before = Date.now() - NOTE_TOMBSTONE_TTL_MS;
+    await this.db.write(async (sql) => {
+      const everyone = await readByEveryone(sql);
+      await inChunks(ids, 500, async (chunk) => {
         removed += await sql.run(
-          `DELETE FROM items WHERE kind = 'note' AND state <> 'live' AND key IN (${chunk.map(() => "?").join(", ")})`,
-          chunk
+          `DELETE FROM items WHERE kind = 'note' AND state <> 'live' AND seq <= ? AND rev < ? AND key IN (${chunk.map(() => "?").join(", ")})`,
+          [everyone, before, ...chunk]
         );
-      })
-    );
+      });
+    });
     this.stats.count("deletes", removed);
     return removed;
   }
@@ -566,19 +612,26 @@ export class Service {
     const seen = [...this.seen];
     this.seen.clear();
     if (events.length > 0 || seen.length > 0) {
-      await this.db.write(async (sql) => {
-        for (const event of events) {
-          await sql.run(`INSERT INTO events (at, level, message, detail) VALUES (?, ?, ?, ?)`, [
-            event.at,
-            event.level,
-            event.message.slice(0, 500),
-            event.detail ? JSON.stringify(event.detail).slice(0, 4000) : null,
-          ]);
-        }
-        for (const [uuid, at] of seen) {
-          await sql.run(`UPDATE devices SET last_seen = ? WHERE uuid = ? AND last_seen < ?`, [at, uuid, at]);
-        }
-      });
+      try {
+        await this.db.write(async (sql) => {
+          for (const event of events) {
+            await sql.run(`INSERT INTO events (at, level, message, detail) VALUES (?, ?, ?, ?)`, [
+              event.at,
+              event.level,
+              event.message.slice(0, 500),
+              event.detail ? JSON.stringify(event.detail).slice(0, 4000) : null,
+            ]);
+          }
+          for (const [uuid, at] of seen) {
+            await sql.run(`UPDATE devices SET last_seen = ? WHERE uuid = ? AND last_seen < ?`, [at, uuid, at]);
+          }
+        });
+      } catch (e) {
+        // Kept for the next flush.
+        this.events = [...events, ...this.events].slice(-EVENTS_KEPT);
+        for (const [uuid, at] of seen) if ((this.seen.get(uuid) ?? 0) < at) this.seen.set(uuid, at);
+        throw e;
+      }
     }
     await this.stats.flush(this.db);
   }
@@ -587,9 +640,7 @@ export class Service {
   async maintenance(): Promise<void> {
     const now = Date.now();
     const removed = await this.db.write(async (sql) => {
-      const min = await sql.get<{ cursor: number | null }>(`SELECT MIN(cursor) AS cursor FROM devices`);
-      // Every device has read up to here (no device: nobody will).
-      const everyone = min?.cursor != null ? Number(min.cursor) : await currentSeq(sql);
+      const everyone = await readByEveryone(sql);
       let n = await sql.run(`DELETE FROM items WHERE kind = 'category' AND state = 'deleted' AND seq <= ? AND updated_at < ?`, [
         everyone,
         now - CATEGORY_TOMBSTONE_TTL_MS,
@@ -680,6 +731,40 @@ export class Service {
 const currentSeq = async (sql: Sql): Promise<number> =>
   Number((await sql.get<{ value: number }>(`SELECT value FROM counters WHERE name = 'seq'`))?.value ?? 0);
 
+/**
+ * Where a page of the rows matching `where` (in seq order) ends: at most PAGE_ROWS rows and about `maxBytes`, at least one
+ * row. Only sizes are read here, so rows past the end are never loaded.
+ */
+const pageCut = async (
+  sql: Sql,
+  where: string,
+  params: Param[],
+  maxBytes: number
+): Promise<{ last: number; more: boolean } | null> => {
+  const rows = await sql.all<{ seq: number; bytes: number }>(
+    `SELECT seq, bytes FROM items WHERE ${where} ORDER BY seq LIMIT ?`,
+    [...params, PAGE_ROWS + 1]
+  );
+  if (rows.length === 0) return null;
+  let bytes = 0;
+  let taken = 0;
+  for (const row of rows.slice(0, PAGE_ROWS)) {
+    bytes += Number(row.bytes);
+    if (taken > 0 && bytes > maxBytes) break;
+    taken++;
+  }
+  return { last: Number(rows[taken - 1].seq), more: rows.length > taken };
+};
+
+/** The last change every device has read (no device: nobody will read any). */
+const readByEveryone = async (sql: Sql): Promise<number> => {
+  const min = await sql.get<{ cursor: number | null }>(`SELECT MIN(cursor) AS cursor FROM devices`);
+  return min?.cursor != null ? Number(min.cursor) : await currentSeq(sql);
+};
+
+/** A revision is a millisecond timestamp: anything else would wedge the note (never superseded, or refused by Postgres). */
+const validRev = (rev: number): boolean => Number.isSafeInteger(rev) && rev >= 0;
+
 const nextSeq = async (sql: Sql): Promise<number> => {
   const row = await sql.get<{ value: number }>(`UPDATE counters SET value = value + 1 WHERE name = 'seq' RETURNING value`);
   if (!row) throw new Error("the sequence counter is missing");
@@ -712,23 +797,18 @@ const feedPage = async (
   cursor: number,
   boot: string
 ): Promise<{ change: Change | null; reads: number }> => {
-  const rows = await sql.all<ItemRow & { bytes: number }>(
-    `SELECT kind, key, state, seq, data, bytes FROM items WHERE seq > ? AND author <> ? ORDER BY seq LIMIT ?`,
-    [cursor, me, PAGE_ROWS + 1]
+  const where = `seq > ? AND author <> ?`;
+  const cut = await pageCut(sql, where, [cursor, me], PAGE_BYTES);
+  if (!cut) return { change: null, reads: 0 };
+  const taken = await sql.all<ItemRow>(
+    `SELECT kind, key, state, seq, data FROM items WHERE ${where} AND seq <= ? ORDER BY seq`,
+    [cursor, me, cut.last]
   );
-  if (rows.length === 0) return { change: null, reads: 0 };
-  const taken: typeof rows = [];
-  let bytes = 0;
-  for (const row of rows.slice(0, PAGE_ROWS)) {
-    bytes += Number(row.bytes);
-    if (taken.length > 0 && bytes > PAGE_BYTES) break;
-    taken.push(row);
-  }
-  const last = Number(taken[taken.length - 1].seq);
+  const last = cut.last;
   const change: Change = {
     token: String(last),
     page: `${boot}.${cursor}.${last}.${taken.length}`,
-    more: rows.length > taken.length,
+    more: cut.more,
     notes: { add: {}, delete: {}, detach: {} },
     categories: { add: {}, delete: {} },
   };

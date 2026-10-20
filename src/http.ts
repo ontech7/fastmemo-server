@@ -68,35 +68,57 @@ const CORS: Record<string, string> = {
 const COMPRESSIBLE = /^(application\/json|text\/|application\/javascript|image\/svg)/;
 const GZIP_MIN_BYTES = 4096;
 
+/**
+ * Behind a proxy, the address it saw: the last X-Forwarded-For entry (the ones before it come from the client, which could
+ * make them up to dodge the wrong-key limit).
+ */
 const clientIp = (req: http.IncomingMessage, trustProxy: boolean): string => {
   if (trustProxy) {
     const forwarded = req.headers["x-forwarded-for"];
-    const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim();
-    if (first) return first;
+    const last = (Array.isArray(forwarded) ? forwarded.join(",") : forwarded)?.split(",").pop()?.trim();
+    if (last) return last;
   }
   return req.socket.remoteAddress ?? "unknown";
 };
 
+/** A malformed escape is the client's mistake (400), not the server's. */
+const decodeParam = (value: string): string => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new HttpError(400, "bad_request", "malformed URL");
+  }
+};
+
+/** An oversized body up to this many times the limit is still read (and dropped) before the 413; past it, cut off. */
+const DRAIN_FACTOR = 4;
+
+/**
+ * The body, up to `limit` bytes. An oversized one is read to its end before the 413 goes out: a client still sending when
+ * the connection closes sees a broken connection, not the answer that tells it to send less (it would retry forever).
+ */
 const readBody = (req: http.IncomingMessage, limit: number): Promise<Buffer> =>
   new Promise((resolve, reject) => {
+    const tooLarge = () => new HttpError(413, "too_large", `The request is over ${Math.round(limit / 1048576)} MB`);
     const declared = Number(req.headers["content-length"]);
-    if (declared > limit) {
-      reject(new HttpError(413, "too_large", `The request is over ${Math.round(limit / 1048576)} MB`));
+    if (declared > limit * DRAIN_FACTOR) {
+      reject(tooLarge());
       return;
     }
-    const chunks: Buffer[] = [];
+    let chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > limit) {
-        reject(new HttpError(413, "too_large", `The request is over ${Math.round(limit / 1048576)} MB`));
+      if (size > limit * DRAIN_FACTOR) {
+        reject(tooLarge());
         req.removeAllListeners("data");
         req.resume();
         return;
       }
-      chunks.push(chunk);
+      if (size > limit) chunks = [];
+      else chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("end", () => (size > limit ? reject(tooLarge()) : resolve(Buffer.concat(chunks))));
     req.on("error", reject);
   });
 
@@ -156,7 +178,7 @@ export const createHttpServer = (options: HttpOptions): http.Server => {
       const route = options.routes.find((r) => {
         if (r.method !== method && !(method === "HEAD" && r.method === "GET")) return false;
         const match = r.pattern.exec(url.pathname);
-        if (match) params = match.slice(1).map((p) => decodeURIComponent(p));
+        if (match) params = match.slice(1).map(decodeParam);
         return match !== null;
       });
       if (!route) throw new HttpError(404, "not_found");

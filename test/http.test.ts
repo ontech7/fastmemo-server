@@ -34,6 +34,10 @@ describe("http", () => {
     assert.equal((await s.call("PATCH", "/v1/push", { token: a })).status, 404);
   });
 
+  test("a malformed escape in the URL is a 400, not a server error", async () => {
+    assert.equal((await s.call("DELETE", "/v1/devices/%E0%A4%A", { token: a })).status, 400);
+  });
+
   test("a body over the limit is refused (413)", async () => {
     const res = await s.call("POST", "/v1/push", {
       token: a,
@@ -50,7 +54,7 @@ describe("http", () => {
     });
     // fetch decompresses transparently: the header tells it was compressed.
     assert.equal(res.headers.get("content-encoding"), "gzip");
-    assert.equal(((await res.json()) as unknown[]).length, 100);
+    assert.equal(((await res.json()) as { notes: unknown[] }).notes.length, 100);
     const raw = await new Promise<Buffer>((resolve, reject) => {
       import("node:http").then(({ get }) =>
         get(`${s.base}/v1/notes`, { headers: { "X-Access-Key": ACCESS_KEY, "Accept-Encoding": "gzip" } }, (r) => {
@@ -60,7 +64,7 @@ describe("http", () => {
         }).on("error", reject)
       );
     });
-    assert.equal(JSON.parse(gunzipSync(raw).toString()).length, 100);
+    assert.equal(JSON.parse(gunzipSync(raw).toString()).notes.length, 100);
   });
 
   test("the dashboard page is served with a strict CSP; only its own files", async () => {
@@ -95,5 +99,24 @@ describe("persistence and schema", { skip: !!PG_URL }, () => {
     await db.write((sql) => sql.run(`UPDATE meta SET value = ? WHERE key = 'schema_version'`, [String(SCHEMA_VERSION + 1)]));
     await assert.rejects(migrate(db), /newer fastmemo-server/);
     await db.close();
+  });
+});
+
+describe("an oversized upload", () => {
+  test("a client still uploading an oversized body gets the 413, not a broken connection", async () => {
+    const big = await startServer({ maxBodyBytes: 512 * 1024 });
+    try {
+      const token = await big.register("U");
+      for (let i = 0; i < 5; i++) {
+        const res = await fetch(`${big.base}/v1/push`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify(ops({ add: [note(`big-${i}`, 1, { text: "x".repeat(1536 * 1024) })] })),
+        });
+        assert.equal(res.status, 413);
+      }
+    } finally {
+      await big.close();
+    }
   });
 });

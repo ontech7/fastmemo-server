@@ -4,7 +4,8 @@ import { createMutex, type Database, type Param, type Sql } from "./db.ts";
 
 /*
  * PostgreSQL through `pg` (loaded only when DATABASE_URL points to Postgres). Reads are REPEATABLE READ snapshots; writes
- * take a transaction-wide advisory lock, so they're serialized like on SQLite even with several server processes.
+ * take a transaction-wide advisory lock, so they're serialized like on SQLite. One server process per database: long
+ * polls, the token cache and the device list live in memory.
  */
 
 /** Any constant: the advisory lock every write takes. */
@@ -20,7 +21,15 @@ export const openPostgres = async (url: string): Promise<Database> => {
   const { default: pg } = await import("pg");
   // BIGINT columns hold sequence numbers and millisecond timestamps, far below 2^53: plain numbers.
   pg.types.setTypeParser(20, (value: string) => Number(value));
-  const pool = new pg.Pool({ connectionString: url, max: 10 });
+  // Timeouts: a connection that hangs (half-open, a stuck query) must not hold the write lock, and every push with it.
+  const pool = new pg.Pool({
+    connectionString: url,
+    max: 10,
+    keepAlive: true,
+    connectionTimeoutMillis: 10_000,
+    statement_timeout: 60_000,
+    idle_in_transaction_session_timeout: 60_000,
+  });
   pool.on("error", () => {}); // an idle client dropped by the server: the pool replaces it
 
   const sqlOf = (client: PoolClient): Sql => ({
