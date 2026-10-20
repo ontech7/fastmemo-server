@@ -3,6 +3,7 @@ data/
 *.db
 *.db-wal
 *.db-shm
+*.sql
 .env
 !.env.example
 coverage/

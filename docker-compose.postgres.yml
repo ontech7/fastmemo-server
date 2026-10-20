@@ -5,8 +5,8 @@
 #   docker compose -f docker-compose.postgres.yml up -d
 services:
   fastmemo:
+    image: ghcr.io/ontech7/fastmemo-server:latest # downloaded, or built from this folder (see docker-compose.yml)
     build: .
-    image: fastmemo-server:local
     container_name: fastmemo-server
     restart: unless-stopped
     ports:

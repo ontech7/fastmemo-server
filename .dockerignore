@@ -7,6 +7,7 @@ docs
 *.db
 *.db-wal
 *.db-shm
+*.sql
 .DS_Store
 .github
 Dockerfile

@@ -4,11 +4,14 @@
 #   docker compose up -d
 #   docker compose logs fastmemo
 #
-# The app connects to http://<this computer's address>:8787 and the dashboard is at the same address.
+# The server and its dashboard are at http://<this computer's address>:8787. The web app needs HTTPS in front of it (README).
+#
+# `image` is the published image (amd64 and arm64): Docker downloads it, or builds this folder when it can't.
+# `docker compose up -d --build` always builds from the source here.
 services:
   fastmemo:
+    image: ghcr.io/ontech7/fastmemo-server:latest
     build: .
-    image: fastmemo-server:local
     container_name: fastmemo-server
     restart: unless-stopped
     ports:

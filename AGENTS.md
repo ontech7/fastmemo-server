@@ -9,7 +9,8 @@ polling, plus an ops dashboard. Node.js ≥ 22.18 running the TypeScript sources
 with no framework, SQLite (`node:sqlite`) by default or PostgreSQL (`pg`). One Docker image.
 
 The app side is `fastmemo-app/src/libs/cloud/serverBackend.ts` (the `CloudBackend` that speaks this API). The API is documented
-in [docs/PROTOCOL.md](docs/PROTOCOL.md); the user guide is the [README](README.md).
+in [docs/PROTOCOL.md](docs/PROTOCOL.md); the user guide is the [README](README.md), with the details in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Layout
 
@@ -27,7 +28,8 @@ src/
   store/        -> db.ts (Sql/Database, write mutex), sqlite.ts, postgres.ts (? -> $n), schema.ts (migrations)
 public/         -> the dashboard (vanilla JS module, strict CSP)
 test/           -> node:test suites (helpers.ts: TEST_DATABASE_URL runs them on Postgres)
-docs/           -> PROTOCOL.md
+docs/           -> PROTOCOL.md (the API), DEPLOYMENT.md (setups, backups, troubleshooting)
+.github/        -> workflows/docker.yml: a v* tag (matching package.json) publishes ghcr.io/ontech7/fastmemo-server
 ```
 
 ## Rules
@@ -53,7 +55,8 @@ docs/           -> PROTOCOL.md
 3. **Always go through `db.write()`** for writes (one transaction, serialized) and bump the hub (`changed()`) after a write
    devices can see.
 4. **Always count operations** in `stats` (reads, writes, deletes) the way Firestore would bill them.
-5. **Always keep the README's ELI5 tone**: steps a non-developer can follow, every command tested.
+5. **Always keep the README's ELI5 tone**: short, plain steps a non-developer can follow, every command tested. Long detail goes
+   in `docs/DEPLOYMENT.md`.
 6. **Always give a test that starts its own server its own `describe`**: on Postgres the tests share one database, which every
    new test server empties (a server started inside another suite wipes that suite's data).
 
