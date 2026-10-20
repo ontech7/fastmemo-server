@@ -17,6 +17,7 @@ describe("devices", () => {
     assert.equal(typeof res.body.token, "string");
     assert.ok(res.body.token.length >= 40);
     const list = await s.call("GET", "/v1/devices", { token: res.body.token });
+    assert.equal(list.body.maxDevices, 3);
     const me = list.body.devices.find((d: any) => d.uuid === "dev-1");
     assert.equal(me.modelName, "Pixel 9");
     assert.equal(me.brand, "web");

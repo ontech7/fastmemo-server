@@ -60,7 +60,8 @@ export const apiRoutes = (service: Service, info: ServerInfo): Route[] => [
     method: "GET",
     pattern: /^\/v1\/devices$/,
     auth: "member",
-    handler: async () => ({ json: { devices: await service.listDevices() } }),
+    // With the limit: a device that didn't connect in this run (no /v1/info handshake) still knows it.
+    handler: async () => ({ json: { devices: await service.listDevices(), maxDevices: service.maxDevices } }),
   },
   {
     method: "DELETE",

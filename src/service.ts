@@ -19,7 +19,7 @@ import {
   type Snapshot,
   type VaultRead,
 } from "./model.ts";
-import type { Stats } from "./stats.ts";
+import { dayOf, type Stats } from "./stats.ts";
 import type { Database, Param, Sql } from "./store/db.ts";
 
 /*
@@ -282,7 +282,7 @@ export class Service {
     const { change, vault, reads } = await this.db.read(async (sql) => {
       const device = await sql.get<{ cursor: number }>(`SELECT cursor FROM devices WHERE uuid = ?`, [me]);
       // Removed meanwhile: the list (without it) tells the app.
-      const feed = device ? await feedPage(sql, me, Number(device.cursor)) : { change: null, reads: 0 };
+      const feed = device ? await feedPage(sql, me, Number(device.cursor), this.hub.boot) : { change: null, reads: 0 };
       return { change: feed.change, vault: await readVault(sql), reads: feed.reads + 1 };
     });
     this.stats.count("syncs");
@@ -599,7 +599,7 @@ export class Service {
         now - NOTE_TOMBSTONE_TTL_MS,
       ]);
       await sql.run(`DELETE FROM events WHERE id <= (SELECT MAX(id) FROM events) - ?`, [EVENTS_KEPT]);
-      const oldest = new Date(now - STATS_KEPT_DAYS * 86_400_000).toISOString().slice(0, 10);
+      const oldest = dayOf(now - STATS_KEPT_DAYS * 86_400_000);
       await sql.run(`DELETE FROM stats WHERE day < ?`, [oldest]);
       return n;
     });
@@ -701,8 +701,17 @@ const vaultData = (vault: unknown): string => {
   return data;
 };
 
-/** The next page of what others wrote after `cursor`. */
-const feedPage = async (sql: Sql, me: string, cursor: number): Promise<{ change: Change | null; reads: number }> => {
+/**
+ * The next page of what others wrote after `cursor`. Its id can't repeat with other content while the server runs (a
+ * write always takes a higher seq, so a range only loses rows); `boot` keeps it from repeating after a restart too, as a
+ * restored backup brings the seq counter back.
+ */
+const feedPage = async (
+  sql: Sql,
+  me: string,
+  cursor: number,
+  boot: string
+): Promise<{ change: Change | null; reads: number }> => {
   const rows = await sql.all<ItemRow & { bytes: number }>(
     `SELECT kind, key, state, seq, data, bytes FROM items WHERE seq > ? AND author <> ? ORDER BY seq LIMIT ?`,
     [cursor, me, PAGE_ROWS + 1]
@@ -718,7 +727,7 @@ const feedPage = async (sql: Sql, me: string, cursor: number): Promise<{ change:
   const last = Number(taken[taken.length - 1].seq);
   const change: Change = {
     token: String(last),
-    page: `${cursor}.${last}.${taken.length}`,
+    page: `${boot}.${cursor}.${last}.${taken.length}`,
     more: rows.length > taken.length,
     notes: { add: {}, delete: {}, detach: {} },
     categories: { add: {}, delete: {} },

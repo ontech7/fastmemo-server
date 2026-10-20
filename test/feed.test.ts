@@ -195,3 +195,23 @@ describe("feed", () => {
     assert.equal(res.body.error, "device_unknown");
   });
 });
+
+/** Its own server (and database: on Postgres the tests share one, emptied by each new server). */
+describe("feed across a restart", () => {
+  test("a page from before a restart never matches (a restored backup brings the seq counter back)", async () => {
+    const first = await startServer();
+    const ta = await first.register("RA");
+    const tb = await first.register("RB");
+    await first.call("POST", "/v1/push", { token: ta, body: ops({ add: [note("r1", 10)] }) });
+    const page = (await first.call("GET", "/v1/sync", { token: tb })).body.change.page;
+    await first.app.close();
+    const second = await startServer({}, first.db);
+    try {
+      const change = (await second.call("GET", `/v1/sync?p=${encodeURIComponent(page)}`, { token: tb })).body.change;
+      assert.notEqual(change.same, true);
+      assert.ok(change.notes.add.r1);
+    } finally {
+      await second.close();
+    }
+  });
+});

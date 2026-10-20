@@ -7,8 +7,8 @@ import { randomBytes } from "node:crypto";
  */
 
 export class Hub {
-  /** Changes on every start: a version from before a restart never matches. */
-  private readonly boot = randomBytes(4).toString("hex");
+  /** Changes on every start: a version (or a feed page) from before a restart never matches. */
+  readonly boot = randomBytes(4).toString("hex");
   private counter = 0;
   private waiters = new Set<() => void>();
   private closed = false;
