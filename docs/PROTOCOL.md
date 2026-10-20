@@ -17,7 +17,8 @@ reads only `id` (notes), `icon` (categories) and the revision (`rev`, or `update
 | `Authorization: Bearer <admin>` | the dashboard           | `/admin/api/*`                                  |
 
 - A device token is returned once, by `POST /v1/devices`. The server keeps only its SHA-256. Removing the device revokes it.
-- A token the server doesn't know: `401 {"error":"device_unknown"}`: the app treats it as "this device was removed".
+- A token the server doesn't know: `401 {"error":"device_unknown"}`. The app treats it as "this device was removed" only when
+  the refused token is the one it holds now (a request still carrying a token that a new registration replaced is retried).
 - A wrong key: `401 {"error":"unauthorized"}`. After 20 wrong keys in 15 minutes, an address gets `429 {"error":"rate_limited"}`
   for a while (tokens don't count).
 
@@ -118,7 +119,8 @@ Rules (the same as the Firebase adapter's):
   server's version comes back in `superseded`, and the app keeps both (a conflict copy).
 - **Delete**: refused (superseded) when the server's live version is newer than the delete. The same delete again, or an older
   one, changes nothing.
-- **Detach** (a note made device-only): always written.
+- **Detach** (a note made device-only): always accepted, even over a newer live version (the note leaves the cloud). The same
+  detach again, or an older one, changes nothing.
 - **Categories**: written only when different.
 - A note larger than `MAX_NOTE_MB` is refused for good: `rejected: ["addNotes:<id>"]`.
 
@@ -131,7 +133,8 @@ Rules (the same as the Firebase adapter's):
 }
 ```
 
-A request larger than `MAX_BODY_MB` gets `413`: the app splits its outbox and retries.
+A request larger than `MAX_BODY_MB` gets `413`: the app splits its outbox and retries. The server reads an oversized body to its
+end (up to 4 × the limit) before answering, so a client still uploading gets the `413` rather than a broken connection.
 
 ## Vault
 
@@ -150,14 +153,21 @@ What the app reads and writes outside the feed (connecting, full sync, vault mig
 
 | Request                     | Auth   | Body / response                                                              |
 | --------------------------- | ------ | ---------------------------------------------------------------------------- |
-| `GET /v1/notes`             | member | every live note, as stored                                                   |
+| `GET /v1/notes?after=<seq>` | member | a page of the live notes, as stored: `{ notes, next }` (see below)           |
 | `GET /v1/notes/:id`         | member | one live note, or `404`                                                      |
 | `POST /v1/notes/import`     | member | `{ notes: [Note] }` → `204`: written as they are, no guard (vault migration) |
 | `DELETE /v1/notes`          | member | `204`: every note and deletion marker removed (vault reset)                  |
 | `GET /v1/tombstones`        | member | `{ "<id>": { rev, detach?: true } }`: the deletion markers                   |
-| `POST /v1/tombstones/prune` | member | `{ ids: [...] }` → `{ removed }`                                             |
+| `POST /v1/tombstones/prune` | member | `{ ids: [...] }` → `{ removed }` (see below)                                 |
 | `GET /v1/categories`        | member | every category, by `order`                                                   |
 | `POST /v1/categories/reset` | member | `{ category }` → `204`: every category removed but this one                  |
+
+`GET /v1/notes` pages by `seq`: start with `after=0` and pass each answer's `next` as the next `after`, until `next` is `null`.
+A page holds at most 500 notes or about 8 MB (at least one note); `bytes=<n>` asks for smaller pages (a slow link), never
+larger. A note changed while the pages are read comes again in a later page, newer: the last one read wins.
+
+A deletion marker is pruned only when every device has read past it (it's how they learn of the deletion) and it's older than
+200 days; the ids that don't qualify yet are left alone. With no device registered, every marker is past everyone.
 
 ## Dashboard API
 

@@ -90,7 +90,12 @@ internet.
 
    It prints the address, like `https://raspberrypi.your-tailnet.ts.net`. That's your server address.
 
+3. In `.env`, set `TRUST_PROXY=true` (Tailscale now passes the requests on: this way the server sees which device sent each
+   one), then `docker compose up -d`.
+
 (If it asks to enable HTTPS certificates or MagicDNS, follow the link it prints: it's one click in the Tailscale admin.)
+
+Optional: to keep the server off your home network (Tailscale only), also set `PORT=127.0.0.1:8787` in `.env`.
 
 ## 3. Connect the app
 
@@ -161,8 +166,8 @@ docker compose -f docker-compose.caddy.yml up -d
 
 ## 8. Backups and restore
 
-**Back up**: in the dashboard, **Download a backup**: a single `.db` file with everything. The notes in it stay encrypted, so
-you can keep it anywhere.
+**Back up**: in the dashboard, **Download a backup**: a single `.db` file with everything. The notes in it stay encrypted, but
+it also holds the titles, the device list and (if the server generated it) the access key: keep it private, like a password.
 
 From the command line (for a cron job):
 
@@ -170,7 +175,7 @@ From the command line (for a cron job):
 curl -fsS -H "Authorization: Bearer $FASTMEMO_ADMIN_KEY" http://localhost:8787/admin/api/backup -o fastmemo-$(date +%F).db
 ```
 
-**Restore**:
+**Restore**: put the backup file in the server's folder, and replace `fastmemo-2026-10-20.db` below with its name.
 
 ```sh
 docker compose down
@@ -180,7 +185,9 @@ docker compose up -d
 ```
 
 Then, in the dashboard, **Ask every device for a full sync**: each device compares all its notes with the server's, so whatever
-changed after the backup comes back from the devices.
+changed after the backup comes back from the devices. A device that connected **after** the backup was taken isn't in it: it
+disconnects, and you connect it again (turn sync on, same address and key). A device removed after the backup is back in the
+list: remove it again.
 
 (The volume is called `<folder name>_fastmemo-data`: `docker volume ls` shows it.)
 
@@ -198,18 +205,18 @@ of guessing.
 
 All settings are environment variables, in `.env` (or in Coolify's Environment Variables).
 
-| Variable              | Default                  | What it does                                                                      |
-| --------------------- | ------------------------ | --------------------------------------------------------------------------------- |
-| `FASTMEMO_ACCESS_KEY` | generated on first start | The key devices use to connect. At least 16 characters.                           |
-| `FASTMEMO_ADMIN_KEY`  | the access key           | Opens the dashboard. Set it to keep the dashboard separate from the devices' key. |
-| `PORT`                | `8787`                   | The port on your computer (in the container it's always 8787).                    |
-| `TZ`                  | `UTC`                    | Your time zone (e.g. `Europe/Rome`): the dashboard counts days in it.             |
-| `MAX_DEVICES`         | `10`                     | How many devices can connect.                                                     |
-| `MAX_NOTE_MB`         | `5`                      | The largest note (pictures make notes big).                                       |
-| `MAX_BODY_MB`         | `64`                     | The largest request.                                                              |
-| `TRUST_PROXY`         | `false`                  | `true` behind Caddy, nginx, Traefik, Coolify or Tailscale Serve.                  |
-| `LOG_LEVEL`           | `info`                   | `debug`, `info`, `warn` or `error`.                                               |
-| `DATABASE_URL`        | SQLite in `/data`        | `postgres://user:password@host:5432/db` for PostgreSQL.                           |
+| Variable              | Default                  | What it does                                                                             |
+| --------------------- | ------------------------ | ---------------------------------------------------------------------------------------- |
+| `FASTMEMO_ACCESS_KEY` | generated on first start | The key devices use to connect. At least 16 characters.                                  |
+| `FASTMEMO_ADMIN_KEY`  | the access key           | Opens the dashboard. Set it to keep the dashboard separate from the devices' key.        |
+| `PORT`                | `8787`                   | The port on your computer (in the container it's always 8787).                           |
+| `TZ`                  | `UTC`                    | Your time zone (`.env.example` sets `Europe/Rome`): the dashboard counts days in it.     |
+| `MAX_DEVICES`         | `10`                     | How many devices can connect.                                                            |
+| `MAX_NOTE_MB`         | `5`                      | The largest note (pictures make notes big).                                              |
+| `MAX_BODY_MB`         | `64`                     | The largest request.                                                                     |
+| `TRUST_PROXY`         | `false`                  | `true` behind Caddy, nginx, Traefik, Coolify or Tailscale Serve (they pass requests on). |
+| `LOG_LEVEL`           | `info`                   | `debug`, `info`, `warn` or `error`.                                                      |
+| `DATABASE_URL`        | SQLite in `/data`        | `postgres://user:password@host:5432/db` for PostgreSQL.                                  |
 
 ## 11. PostgreSQL instead of SQLite
 
@@ -222,6 +229,9 @@ docker compose -f docker-compose.postgres.yml up -d
 
 Or point `DATABASE_URL` at a PostgreSQL you already run. Back it up with `pg_dump` (the dashboard's backup button is for
 SQLite).
+
+Run **one** server per database: live updates and the day's counters live in the server, so a second server on the same database
+would miss the first one's changes.
 
 ## 12. Troubleshooting
 
@@ -248,6 +258,9 @@ few minutes and check the key.
 - **Notes** are encrypted on your devices (AES, with a key derived from your encryption password). The server, its database, its
   backups and its logs never contain a readable note. **Titles** are not encrypted (the app sorts by them).
 - **The access key** lets a device join. Each device then gets its own token: removing a device revokes it at once.
+- **A lost or stolen device**: remove it in the dashboard (or from another device's Manage devices): that's what locks it out.
+  Changing `FASTMEMO_ACCESS_KEY` only stops _new_ devices from joining with the old key (do it too if the key may have leaked);
+  the devices already connected keep working with their own tokens.
 - **Over plain `http://`** the key and the titles travel unencrypted: use it only to try things out on your own computer or home
   network. For anything else, use HTTPS.
 - **Wrong keys** are counted and slowed down per address, and logged in the dashboard.
