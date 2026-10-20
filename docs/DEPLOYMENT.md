@@ -160,7 +160,9 @@ Open the server's address in a browser and enter the admin key (`FASTMEMO_ADMIN_
 
 - Open the server's address in the phone's browser. You should see the dashboard's login page. If not, the phone can't reach the
   server: is Tailscale on? Is the address right? Is a firewall in the way?
-- The web app and the Windows desktop app need `https://`. The Android and macOS apps accept `http://` after a warning.
+- The web app and the Windows desktop app need `https://`. The Android, macOS and Linux apps accept `http://` after a warning:
+  type `http://` before a name (`http://nas.home.arpa:8787`); without it the app assumes `https://`, except for an IP address,
+  `localhost` or a `.local` name.
 - Check the key: `docker compose logs fastmemo` shows it if the server generated it.
 
 **"Too many attempts".** After 20 wrong keys in 15 minutes from the same address, the server refuses that address for a while.

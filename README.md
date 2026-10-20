@@ -131,9 +131,13 @@ notes.
 
 ## HTTPS
 
-Use HTTPS. The web app and the Windows desktop app only connect to `https://` addresses. The Android and macOS apps also accept
-`http://`, after a warning: over plain HTTP anyone on the network can read the access key and the note titles, and with the key
-join your server. Plain HTTP only makes sense on a home network you trust.
+Use HTTPS. The web app and the Windows desktop app only connect to `https://` addresses (or to a server on the same computer).
+The Android, macOS and Linux apps also accept `http://`, after a warning. Over plain HTTP, what a device sends isn't encrypted
+on any network it joins, not only at home: a phone set up on your Wi-Fi keeps talking to that address from a café's. Whoever can
+see that traffic can read the note titles and the device's credentials, and with them change or delete notes and remove devices;
+the notes' content stays end-to-end encrypted. The access key only travels when a device connects; after that each device uses
+its own token. If you think one was seen, change the access key and remove and re-add each device: a device's token keeps
+working after a key change.
 
 ### Tailscale (easiest)
 

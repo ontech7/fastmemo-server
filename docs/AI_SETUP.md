@@ -27,14 +27,14 @@ Ask only what you can't find out yourself:
 1. **Where will the server run?** This computer, another computer in the house (a NAS, a Raspberry Pi, a home server), or a VPS.
    If it's another machine, you need a terminal on it (SSH); run every command below there.
 2. **Which devices will connect?** If any of them is the **web app** or the **Windows desktop app**, the server needs HTTPS:
-   they only connect to `https://` addresses. (Android and macOS also accept `http://`, after a warning.)
+   they only connect to `https://` addresses. (Android, macOS and Linux also accept `http://`, after a warning.)
 3. **How should the devices reach it?** Recommend in this order:
    - **Tailscale** (easiest): a private network with HTTPS, no domain, nothing open to the internet, and it works away from home
      too. Every device installs the Tailscale app and signs in to the same account.
    - **Their own domain, with Caddy**: they have a domain, and can point it to the server and open ports 80 and 443.
    - **Coolify**: they already run Coolify.
-   - **The same Wi-Fi, to try it**: plain `http://` on the home network, for Android and macOS only, and only at home. Never on
-     a VPS.
+   - **The same Wi-Fi, to try it**: plain `http://` on the home network, for Android, macOS and Linux only. A phone that leaves
+     the house keeps using that address on other networks, unencrypted: fine to try it, Tailscale for every day. Never on a VPS.
    - **Only this computer**: the desktop app on the same machine. A phone can't use this one.
 
 Use SQLite (the default). Choose PostgreSQL only if they ask for it: see [DEPLOYMENT.md](DEPLOYMENT.md#postgresql).
