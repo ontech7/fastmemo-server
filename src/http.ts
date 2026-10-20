@@ -24,7 +24,7 @@ export interface Request {
   ip: string;
   /** Pattern captures. */
   params: string[];
-  /** The authenticated device (routes with `auth: "device"`). */
+  /** The authenticated device (`auth: "device"`, or "member" with a token); "" otherwise. */
   device: string;
   /** Aborted when the client goes away (a long poll stops waiting). */
   signal: AbortSignal;

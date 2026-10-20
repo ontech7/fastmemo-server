@@ -1,8 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import type { Hub } from "./hub.ts";
-import type { LogRecord } from "./log.ts";
-import { log } from "./log.ts";
+import { log, type LogRecord } from "./log.ts";
 import {
   HttpError,
   isKey,
@@ -124,8 +123,7 @@ export class Service {
   /** Last request per device, written with the stats. */
   private readonly seen = new Map<string, number>();
   private events: LogRecord[] = [];
-  /** The device list as of a hub version (every device's snapshot carries it). */
-  /** One read per hub version, shared by every request that needs it meanwhile. */
+  /** The device list as of a hub version (every snapshot carries it): one read, shared by every request meanwhile. */
   private viewCache: { version: string; devices: Promise<DeviceView[]> } | null = null;
   /** Bumped when a device's tokens stop working: a lookup that started before can't cache a revoked token. */
   private revocations = 0;
