@@ -28,7 +28,7 @@ src/
   store/        -> db.ts (Sql/Database, write mutex), sqlite.ts, postgres.ts (? -> $n), schema.ts (migrations)
 public/         -> the dashboard (vanilla JS module, strict CSP)
 test/           -> node:test suites (helpers.ts: TEST_DATABASE_URL runs them on Postgres)
-docs/           -> PROTOCOL.md (the API), DEPLOYMENT.md (setups, backups, troubleshooting)
+docs/           -> PROTOCOL.md (the API), DEPLOYMENT.md (setups, backups, troubleshooting), images/ (README screenshot)
 .github/        -> workflows/docker.yml: a v* tag (matching package.json) publishes ghcr.io/ontech7/fastmemo-server
 ```
 
@@ -65,4 +65,10 @@ docs/           -> PROTOCOL.md (the API), DEPLOYMENT.md (setups, backups, troubl
 ```sh
 npm run dev | npm start | npm test | npm run test:pg | npm run typecheck | npm run format
 docker compose up -d --build   # the image, SQLite
+npm version 1.2.3 -m "chore: release v%s" && git push --follow-tags   # a release: the v* tag publishes the image
 ```
+
+## Subagents
+
+- `protocol-guard` (`.claude/agents/`): before committing a change to the API, the push guard, the schema or the dashboard, it
+  checks the rules above against the app's side and runs both test suites.
