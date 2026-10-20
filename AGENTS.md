@@ -1,6 +1,8 @@
 # FastMemo Server - AI Agent Instructions
 
 > **Read this file first.** It is the entry point for all AI agents working on the FastMemo server.
+>
+> **Here to install or deploy the server** (not to change its code)? Follow [docs/AI_SETUP.md](docs/AI_SETUP.md) instead.
 
 ## Project Summary
 
@@ -28,7 +30,8 @@ src/
   store/        -> db.ts (Sql/Database, write mutex), sqlite.ts, postgres.ts (? -> $n), schema.ts (migrations)
 public/         -> the dashboard (vanilla JS module, strict CSP)
 test/           -> node:test suites (helpers.ts: TEST_DATABASE_URL runs them on Postgres)
-docs/           -> PROTOCOL.md (the API), DEPLOYMENT.md (setups, backups, troubleshooting), images/ (README screenshot)
+docs/           -> PROTOCOL.md (the API), DEPLOYMENT.md (setups, backups, troubleshooting), AI_SETUP.md (the install
+                   runbook for AI assistants: keep it in step with the README), images/ (README screenshot)
 .github/        -> workflows/docker.yml: a v* tag (matching package.json) publishes ghcr.io/ontech7/fastmemo-server
 ```
 

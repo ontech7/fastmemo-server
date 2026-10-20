@@ -99,10 +99,22 @@ docker compose logs fastmemo
 
 The server now runs on port **8787**, from the image `ghcr.io/ontech7/fastmemo-server`. The logs show the **access key**, the
 password your devices connect with: keep it in a password manager. To choose your own, set `FASTMEMO_ACCESS_KEY` in `.env` (16
-characters or more, for example from `openssl rand -base64 24`) and run `docker compose up -d` again.
+characters or more, for example from `openssl rand -hex 24`) and run `docker compose up -d` again.
 
 Open http://localhost:8787 and enter the key to see the dashboard: devices, space used, operations per day, warnings, backups.
 `docker compose down` stops the server. Your notes stay in a Docker volume.
+
+### With an AI assistant
+
+Using Claude Code, Cursor, Codex or a similar assistant with a terminal? Give it this, on the machine that will run the server:
+
+```text
+Install FastMemo Server for me, following
+https://raw.githubusercontent.com/ontech7/fastmemo-server/main/docs/AI_SETUP.md
+```
+
+It asks where the server runs and how your devices reach it, sets it up with HTTPS, checks that it works, and gives you the
+address and the key.
 
 ## Connect the app
 
@@ -203,8 +215,8 @@ docker compose pull
 docker compose up -d
 ```
 
-With another compose file, add `-f <file>` to each command. `docker compose up -d --build` builds from source instead. The
-database is upgraded on start.
+With another compose file, add `-f <file>` to each command. If `docker compose pull` fails, `docker compose up -d --build`
+builds the new version from source instead. The database is upgraded on start.
 
 ## Security
 
