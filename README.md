@@ -22,12 +22,12 @@ If you find this project useful, consider [buying me a coffee](https://www.buyme
 
 </div>
 
-Run it on a PC, a NAS, a Raspberry Pi or a VPS, and your [FastMemo](https://fastmemo.vercel.app) devices sync their notes
+Run it on a PC, a NAS, a Raspberry Pi or a VPS, and your [FastMemo](https://fastmemo.losav.cc) devices sync their notes
 through it, live, without anyone else's cloud. Notes are encrypted on your devices, so the server only stores data it can't read
 (titles are the exception: see [Security](#security)). One Docker container, one database file, and a dashboard in your browser.
 
 Rather not run a server? FastMemo also syncs through your own Firebase project: see the
-[Firebase guide](https://fastmemo.vercel.app/en/guides/google-firebase/).
+[Firebase guide](https://fastmemo.losav.cc/en/guides/google-firebase/).
 
 ## Table of Contents
 
