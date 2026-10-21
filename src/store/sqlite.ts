@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 
@@ -11,9 +12,12 @@ import { createMutex, type Database, type Param, type Sql } from "./db.ts";
 
 export const openSqlite = (file: string): Database => {
   const memory = file === ":memory:";
-  if (!memory) fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+  const dir = memory ? os.tmpdir() : path.dirname(path.resolve(file));
+  // Titles and the device list are in clear: only this user reads them (a new folder and file; the WAL takes the file's mode).
+  if (!memory) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 
   const db = new DatabaseSync(file);
+  if (!memory) fs.chmodSync(file, 0o600);
   if (!memory) db.exec("PRAGMA journal_mode = WAL");
   // FULL: a commit is on disk when the push returns, and the device then drops its copy from the outbox.
   db.exec("PRAGMA synchronous = FULL");
@@ -44,13 +48,19 @@ export const openSqlite = (file: string): Database => {
         db.exec("COMMIT");
         return result;
       } catch (e) {
-        db.exec("ROLLBACK");
+        // SQLite may have rolled back already (a full disk): the error to report is the first one.
+        try {
+          db.exec("ROLLBACK");
+        } catch {
+          // no transaction left to roll back
+        }
         throw e;
       }
     });
 
   return {
     driver: "sqlite",
+    scratchDir: dir,
     read: (fn) => transaction("BEGIN", fn),
     write: (fn) => transaction("BEGIN IMMEDIATE", fn),
     sizeBytes: async () => {

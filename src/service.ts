@@ -286,8 +286,8 @@ export class Service {
   // --- Sync ---
 
   /** Waits until something changed since `version` (a long poll), at most `ms`. */
-  waitForChange(version: string, ms: number, signal: AbortSignal): Promise<void> {
-    return this.hub.wait(version, ms, signal);
+  waitForChange(version: string, ms: number, signal: AbortSignal, device?: string): Promise<void> {
+    return this.hub.wait(version, ms, signal, device);
   }
 
   /**
@@ -390,7 +390,8 @@ export class Service {
           const key = stub.id as string;
           const data = JSON.stringify(stub);
           const rev = noteRev(stub);
-          if (!validRev(rev)) {
+          // A stub is an id, a type, a revision and two dates: a big one would be fetched by every other device in its feed.
+          if (byteLength(data) > MAX_STUB_BYTES || !validRev(rev)) {
             result.rejected.push(`${queueOf("note", state)}:${key}`);
             continue;
           }
@@ -562,6 +563,8 @@ export class Service {
       for (const note of notes as Json[]) {
         const data = JSON.stringify(note);
         if (byteLength(data) > this.limits.maxNoteBytes) throw new HttpError(413, "too_large", `note ${note.id} is too large`);
+        // As a push: a revision no later upload could pass (1e300), or one Postgres can't store (1.5), is refused.
+        if (!validRev(noteRev(note))) throw new HttpError(400, "bad_request", `note ${note.id} has an invalid revision`);
         await sql.run(
           `INSERT INTO items (kind, key, state, rev, seq, author, data, bytes, updated_at) VALUES ('note', ?, 'live', ?, ?, ?, ?, ?, ?)
            ON CONFLICT (kind, key) DO UPDATE SET state = excluded.state, rev = excluded.rev, seq = excluded.seq,
@@ -766,6 +769,9 @@ const readByEveryone = async (sql: Sql): Promise<number> => {
 
 /** A revision is a millisecond timestamp: anything else would wedge the note (never superseded, or refused by Postgres). */
 const validRev = (rev: number): boolean => Number.isSafeInteger(rev) && rev >= 0;
+
+/** The largest deletion or detach stub a push may carry (the app's are about 150 bytes). */
+const MAX_STUB_BYTES = 4096;
 
 const nextSeq = async (sql: Sql): Promise<number> => {
   const row = await sql.get<{ value: number }>(`UPDATE counters SET value = value + 1 WHERE name = 'seq' RETURNING value`);

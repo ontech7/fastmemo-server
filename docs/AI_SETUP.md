@@ -165,7 +165,7 @@ Desktop: turn on **Settings → General → Start Docker Desktop when you sign i
 
 ## 5. Check that it works
 
-Run these on the server, with the key from `.env` (or from the logs):
+Run these on the server, with the key from `.env`:
 
 ```sh
 docker compose ps                                   # fastmemo: "Up ... (healthy)", within about 30 seconds
@@ -205,19 +205,19 @@ Tell the person, in plain words:
 
 ## If something fails
 
-| What you see                                                 | What to do                                                                                                                        |
-| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `Configuration error: ...` in `docker compose logs fastmemo` | Fix that value in `.env` (keys need 16+ characters), then `docker compose up -d`.                                                 |
-| `port is already allocated`                                  | Another program uses the port: set another `PORT` in `.env`, then `docker compose up -d`.                                         |
-| `container name "/fastmemo-server" is already in use`        | FastMemo Server is already installed on this machine (see [step 2](#2-check-the-machine)): ask before going on.                   |
-| `permission denied` on the Docker socket                     | The user isn't in the `docker` group yet: `sudo usermod -aG docker $USER`, then log out and back in.                              |
-| `/v1/health` works on the server but not from outside        | The HTTPS step: Tailscale not serving (`tailscale serve status`), DNS not pointing to the server, or ports 80/443 closed.         |
-| `required variable CLOUDFLARE_TUNNEL_TOKEN is missing`       | Set the token in `.env`, then run the command again.                                                                              |
-| `Provided Tunnel token is not valid` (logs of `cloudflared`) | The token was copied wrong: copy it again from the tunnel in the Cloudflare dashboard, then `up -d` again.                        |
-| Cloudflare: the page shows a 502 or "Bad gateway"            | The route's service URL is wrong: it must be `http://fastmemo:8787`.                                                              |
-| Tailscale container: the address doesn't answer              | Not signed in (the link in its logs), or HTTPS Certificates off on the admin's DNS page.                                          |
-| The app says the key is wrong                                | Compare it with `.env` (or the logs). After 20 wrong tries in 15 minutes, the address is refused for a while: wait a few minutes. |
-| The web app or the Windows app can't connect to `http://`    | They need HTTPS: set up Tailscale or Caddy.                                                                                       |
+| What you see                                                 | What to do                                                                                                                |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `Configuration error: ...` in `docker compose logs fastmemo` | Fix that value in `.env` (keys need 16+ characters), then `docker compose up -d`.                                         |
+| `port is already allocated`                                  | Another program uses the port: set another `PORT` in `.env`, then `docker compose up -d`.                                 |
+| `container name "/fastmemo-server" is already in use`        | FastMemo Server is already installed on this machine (see [step 2](#2-check-the-machine)): ask before going on.           |
+| `permission denied` on the Docker socket                     | The user isn't in the `docker` group yet: `sudo usermod -aG docker $USER`, then log out and back in.                      |
+| `/v1/health` works on the server but not from outside        | The HTTPS step: Tailscale not serving (`tailscale serve status`), DNS not pointing to the server, or ports 80/443 closed. |
+| `required variable CLOUDFLARE_TUNNEL_TOKEN is missing`       | Set the token in `.env`, then run the command again.                                                                      |
+| `Provided Tunnel token is not valid` (logs of `cloudflared`) | The token was copied wrong: copy it again from the tunnel in the Cloudflare dashboard, then `up -d` again.                |
+| Cloudflare: the page shows a 502 or "Bad gateway"            | The route's service URL is wrong: it must be `http://fastmemo:8787`.                                                      |
+| Tailscale container: the address doesn't answer              | Not signed in (the link in its logs), or HTTPS Certificates off on the admin's DNS page.                                  |
+| The app says the key is wrong                                | Compare it with `.env`. After 20 wrong tries in 15 minutes, the address is refused for a while: wait a few minutes.       |
+| The web app or the Windows app can't connect to `http://`    | They need HTTPS: set up Tailscale or Caddy.                                                                               |
 
 Anything else: [DEPLOYMENT.md → Troubleshooting](DEPLOYMENT.md#troubleshooting), then the logs
 (`docker compose logs --tail 100 fastmemo`). If it's still stuck, stop and tell the person what you saw; don't change the code.

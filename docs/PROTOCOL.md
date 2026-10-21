@@ -124,7 +124,8 @@ Rules (the same as the Firebase adapter's):
 - **Detach** (a note made device-only): always accepted, even over a newer live version (the note leaves the cloud). The same
   detach again, or an older one, changes nothing.
 - **Categories**: written only when different.
-- A note larger than `MAX_NOTE_MB` is refused for good: `rejected: ["addNotes:<id>"]`.
+- A note larger than `MAX_NOTE_MB`, a deletion or detach stub over 4 KB, or an entry whose revision isn't a whole number from 0
+  to 2^53 - 1, is refused for good: `rejected: ["addNotes:<id>"]`. An import with such a revision is a `400`.
 
 ```json
 {

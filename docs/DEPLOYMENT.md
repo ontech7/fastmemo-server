@@ -19,12 +19,12 @@ To run the image without cloning the repository:
 
 ```sh
 docker run -d --name fastmemo-server --restart unless-stopped -p 8787:8787 -v fastmemo-data:/data \
-  -e TZ=Europe/Rome ghcr.io/ontech7/fastmemo-server:latest
+  --env-file .env ghcr.io/ontech7/fastmemo-server:latest
 docker logs fastmemo-server
 ```
 
-Add `-e NAME=value` for any other setting. The volume is then `fastmemo-data`, not `fastmemo-server_fastmemo-data` (keep that in
-mind for the restore steps).
+`.env` holds the settings, `FASTMEMO_ACCESS_KEY` at least (copy [.env.example](../.env.example)); `-e NAME=value` works too. The
+volume is then `fastmemo-data`, not `fastmemo-server_fastmemo-data` (keep that in mind for the restore steps).
 
 ## Raspberry Pi
 
@@ -45,8 +45,10 @@ mind for the restore steps).
 - `tailscale serve --bg 8787` serves `https://<machine>.<your-tailnet>.ts.net` and forwards to port 8787 on the same machine. If
   it asks to enable HTTPS certificates or MagicDNS, follow the link it prints: it's one click in the Tailscale admin.
 - `TRUST_PROXY=true` lets the server see which device sent each request, for the logs and the wrong-key limit. Without it, every
-  request seems to come from the same local address.
-- To keep the server off your home network (reachable through Tailscale only), also set `PORT=127.0.0.1:8787` in `.env`.
+  request seems to come from the same local address. The server takes the address from the proxy's `X-Forwarded-For` only on a
+  connection from a private address (where a proxy connects from).
+- Set `PORT=127.0.0.1:8787` in `.env` as well: the server is then reached through Tailscale only. Published on every address, a
+  device on your network could reach it directly and, with `TRUST_PROXY`, pose as another address.
 - Tailscale signs a machine out after 180 days by default. For a server, turn that off: on the **Machines** page of the admin,
   open the server's menu and choose **Disable key expiry**.
 
@@ -146,7 +148,8 @@ node --env-file=.env --disable-warning=ExperimentalWarning src/main.ts
 - `npm ci --omit=dev` installs the one dependency (`pg`). `--env-file=.env` reads the settings; without it, set them in the
   environment.
 - The database goes in `./data`; `DATA_DIR` changes it.
-- `PORT` must be a plain number here. `HOST=127.0.0.1` keeps the server off your network.
+- `PORT` must be a plain number here. The server listens on this computer only: put HTTPS in front of it, or set `HOST=0.0.0.0`
+  for the devices on your network to reach it directly.
 - Keep it running with your system's service manager (systemd, launchd, a Windows service), and put HTTPS in front of it as you
   would with Docker.
 
@@ -159,12 +162,17 @@ node --env-file=.env --disable-warning=ExperimentalWarning src/main.ts
 
 ## Security details
 
-- Each device gets its own token when it joins, and the server keeps only its SHA-256 hash. Removing a device revokes it at
-  once.
-- Changing the access key only stops new devices from joining. To lock out a device, remove it.
+- Each device gets its own token when it joins, and the server keeps only its SHA-256 hash. Removing a device revokes its token
+  at once.
+- Every device also holds the access key, and can join again with it. To lock out a lost device: remove it **and** change the
+  access key. Changing the key alone only stops new devices from joining: the others keep syncing with their tokens.
 - The server never logs note contents or keys. The access key comes only from the environment: without one the server doesn't
   start, so a forgotten setting can't leave it open.
-- The container runs as the unprivileged `node` user and writes only to `/data`.
+- The container runs as the unprivileged `node` user and writes only to `/data` (a backup is written there before it's sent,
+  then removed). Its files are readable by that user only.
+- Without Docker the server listens on `127.0.0.1` unless `HOST` says otherwise.
+- Wrong keys: 20 per address (an IPv6 /64 counts as one) in 15 minutes, then that address is refused for a while; 500 from all
+  addresses together, then every key attempt is refused for a while (devices keep syncing with their tokens).
 - The dashboard has a strict Content Security Policy and can't be framed.
 
 ## Backups
@@ -205,7 +213,7 @@ Open the server's address in a browser and enter the admin key (`FASTMEMO_ADMIN_
 - **Notes, devices, space:** how many notes, how big, how many devices out of the maximum.
 - **Operations per day**, for the last 30 days: reads, writes and deletes, counted the way Firestore counts them.
 - **Devices:** when each one last synced, whether it has a note open, and how many changes it hasn't pulled yet. You can
-  **remove** a device (its access stops at once) or ask it for a **full sync**.
+  **remove** a device (its token stops at once: for a lost device, change the access key too) or ask it for a **full sync**.
 - **Backup:** downloads the whole SQLite database.
 - **Recent warnings and errors:** wrong keys, refused requests, problems.
 

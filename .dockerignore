@@ -8,7 +8,7 @@ docs
 *.db-wal
 *.db-shm
 *.sql
-.DS_Store
+**/.DS_Store
 .github
 Dockerfile
 docker-compose*.yml

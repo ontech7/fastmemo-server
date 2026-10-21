@@ -98,7 +98,8 @@ cp .env.example .env
 Open `.env` and set `FASTMEMO_ACCESS_KEY`: the **access key**, the password your devices connect with (16 characters or more).
 Make a random one with `openssl rand -hex 24` (macOS, Linux) or, on any computer with Docker,
 `docker run --rm node:24-alpine node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`. Keep it in a password
-manager: the server never shows it, and without it the server doesn't start. Then:
+manager: the server never shows it, and without it the server doesn't start. Set `FASTMEMO_ADMIN_KEY` too, made the same way: it
+opens the dashboard (left empty, the access key does, and every device holds that one). Then:
 
 ```sh
 docker compose up -d
@@ -152,7 +153,8 @@ internet.
 
 1. Install Tailscale on the server and on every device, and sign in with the same account.
 2. On the server, run `sudo tailscale serve --bg 8787`. It prints your address, like `https://raspberrypi.your-tailnet.ts.net`.
-3. Set `TRUST_PROXY=true` in `.env` and run `docker compose up -d`.
+3. Set `TRUST_PROXY=true` and `PORT=127.0.0.1:8787` in `.env`, and run `docker compose up -d`. The server is then reached
+   through Tailscale only: nobody on your network can reach it directly and pose as another address.
 
 **Can't install Tailscale on the server** (a NAS, for example)? Run it in a container next to the server instead. Turn on
 **HTTPS Certificates** in the Tailscale admin (**DNS** page), then:
@@ -204,25 +206,25 @@ Step by step, and troubleshooting: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 Settings go in `.env` (on Coolify, in Environment Variables). Run `docker compose up -d` after a change.
 
-| Variable                  | Default        | What it does                                                                                                    |
-| ------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------- |
-| `FASTMEMO_ACCESS_KEY`     | none: required | The key devices connect with, at least 16 characters. The server won't start without it.                        |
-| `FASTMEMO_ADMIN_KEY`      | the access key | Opens the dashboard.                                                                                            |
-| `PORT`                    | `8787`         | The port on your computer. With Docker, `127.0.0.1:8787` hides it from your network.                            |
-| `TZ`                      | `UTC`          | The time zone the dashboard counts days in.                                                                     |
-| `MAX_DEVICES`             | `10`           | How many devices can connect.                                                                                   |
-| `MAX_NOTE_MB`             | `5`            | The largest note, in MB, encrypted: its text can be about 3/4 of it. Bigger notes stay offline on their device. |
-| `MAX_BODY_MB`             | `64`           | The largest request, in MB.                                                                                     |
-| `TRUST_PROXY`             | `false`        | `true` behind Tailscale Serve, Caddy, Cloudflare Tunnel, nginx, Traefik or Coolify.                             |
-| `LOG_LEVEL`               | `info`         | `debug`, `info`, `warn` or `error`.                                                                             |
-| `DATABASE_URL`            | SQLite         | `postgres://user:password@host:5432/db` for PostgreSQL.                                                         |
-| `DATA_DIR`                | `./data`       | Without Docker: where the SQLite file goes (the image uses `/data`).                                            |
-| `HOST`                    | `0.0.0.0`      | Without Docker: the address to listen on.                                                                       |
-| `POSTGRES_PASSWORD`       |                | Only for `docker-compose.postgres.yml`.                                                                         |
-| `DOMAIN`                  |                | Only for `docker-compose.caddy.yml`.                                                                            |
-| `CLOUDFLARE_TUNNEL_TOKEN` |                | Only for `docker-compose.cloudflare.yml`.                                                                       |
-| `TS_AUTHKEY`              |                | Only for `docker-compose.tailscale.yml`: signs it in, instead of the link in its logs.                          |
-| `TS_HOSTNAME`             | `fastmemo`     | Only for `docker-compose.tailscale.yml`: the first part of its address.                                         |
+| Variable                  | Default        | What it does                                                                                                              |
+| ------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `FASTMEMO_ACCESS_KEY`     | none: required | The key devices connect with, at least 16 characters. The server won't start without it.                                  |
+| `FASTMEMO_ADMIN_KEY`      | the access key | Opens the dashboard.                                                                                                      |
+| `PORT`                    | `8787`         | The port on your computer. With Docker, `127.0.0.1:8787` hides it from your network.                                      |
+| `TZ`                      | `UTC`          | The time zone the dashboard counts days in.                                                                               |
+| `MAX_DEVICES`             | `10`           | How many devices can connect.                                                                                             |
+| `MAX_NOTE_MB`             | `5`            | The largest note, in MB, encrypted: its text can be about 3/4 of it. Bigger notes stay offline on their device.           |
+| `MAX_BODY_MB`             | `64`           | The largest request, in MB.                                                                                               |
+| `TRUST_PROXY`             | `false`        | `true` behind Tailscale Serve, Caddy, Cloudflare Tunnel, nginx, Traefik or Coolify (trusted from private addresses only). |
+| `LOG_LEVEL`               | `info`         | `debug`, `info`, `warn` or `error`.                                                                                       |
+| `DATABASE_URL`            | SQLite         | `postgres://user:password@host:5432/db` for PostgreSQL.                                                                   |
+| `DATA_DIR`                | `./data`       | Without Docker: where the SQLite file goes (the image uses `/data`).                                                      |
+| `HOST`                    | `127.0.0.1`    | Without Docker: the address to listen on. `0.0.0.0` puts the server on your network.                                      |
+| `POSTGRES_PASSWORD`       |                | Only for `docker-compose.postgres.yml`.                                                                                   |
+| `DOMAIN`                  |                | Only for `docker-compose.caddy.yml`.                                                                                      |
+| `CLOUDFLARE_TUNNEL_TOKEN` |                | Only for `docker-compose.cloudflare.yml`.                                                                                 |
+| `TS_AUTHKEY`              |                | Only for `docker-compose.tailscale.yml`: signs it in, instead of the link in its logs.                                    |
+| `TS_HOSTNAME`             | `fastmemo`     | Only for `docker-compose.tailscale.yml`: the first part of its address.                                                   |
 
 ## Backups and restore
 
@@ -269,8 +271,9 @@ builds the new version from source instead. The database is upgraded on start.
 
 ### Lost device or leaked key
 
-- **Lost or stolen device:** remove it in the dashboard, or in the app (**Settings → Cloud Sync → Manage devices**). Its access
-  stops at once.
+- **Lost or stolen device:** remove it in the dashboard, or in the app (**Settings → Cloud Sync → Manage devices**), **and**
+  change the access key (a new `FASTMEMO_ACCESS_KEY`, then `docker compose up -d`). Removing it stops its token at once, but the
+  device also holds the access key, with which it could join again. Your other devices keep syncing: their tokens don't change.
 - **Leaked access key:** set a new `FASTMEMO_ACCESS_KEY` and run `docker compose up -d`. New devices then need the new key, but
   connected devices keep working, so also remove any device you don't recognize.
 - **Encryption password:** change it in the app (**Settings → Cloud Sync → Change password**). The server never sees it.

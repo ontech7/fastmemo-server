@@ -25,6 +25,8 @@ export interface Database {
   sizeBytes(): Promise<number>;
   /** A consistent copy of the whole database into `file` (SQLite only). */
   backup(file: string): Promise<void>;
+  /** Where a backup is written before it's sent: next to the database (the only place the container writes to). */
+  readonly scratchDir: string;
   close(): Promise<void>;
 }
 

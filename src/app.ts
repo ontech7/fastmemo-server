@@ -65,9 +65,17 @@ export const createApp = (options: AppOptions): App => {
     const valid =
       auth === "admin" ? sameKey(bearerOf(req), options.adminKey) : sameKey(header(req, "x-access-key"), options.accessKey);
     if (valid) return auth === "admin" ? "admin" : "";
-    limiter.fail(req.ip);
+    const failure = limiter.fail(req.ip);
     stats.count("authFailures");
-    log.warn("wrong key", { ip: req.ip, path: req.path, kind: auth === "admin" ? "admin key" : "access key" });
+    // One line when an address starts failing and one when it's refused, not one per attempt (a guessing client would fill
+    // the logs and the dashboard's events).
+    if (failure !== "more") {
+      log.warn(failure === "first" ? "wrong key" : "wrong key: address refused for 15 minutes", {
+        ip: req.ip,
+        path: req.path,
+        kind: auth === "admin" ? "admin key" : "access key",
+      });
+    }
     throw new HttpError(401, "unauthorized", "Wrong key");
   };
 
@@ -96,7 +104,7 @@ export const createApp = (options: AppOptions): App => {
     hub,
     stats,
     limiter,
-    listen: (port, host = "0.0.0.0") =>
+    listen: (port, host = "127.0.0.1") =>
       new Promise((resolve, reject) => {
         server.once("error", reject);
         server.listen(port, host, () => {

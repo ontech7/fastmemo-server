@@ -28,6 +28,8 @@ const prepare = async (db: Database): Promise<string> =>
   });
 
 const main = async () => {
+  // Files this server writes (the database, a backup on its way out) are readable by its own user only.
+  process.umask(0o077);
   let config;
   try {
     config = loadConfig();
@@ -61,6 +63,9 @@ const main = async () => {
     database: config.database.driver === "sqlite" ? `sqlite ${config.database.path}` : "postgres",
     instance,
   });
+  if (!config.adminKey) {
+    log.warn("FASTMEMO_ADMIN_KEY is not set: the access key, which every device holds, also opens the dashboard");
+  }
 
   const flush = setInterval(() => app.service.flush().catch((e) => log.error("flush failed", { error: e })), FLUSH_MS);
   const maintain = () => app.service.maintenance().catch((e) => log.error("maintenance failed", { error: e }));

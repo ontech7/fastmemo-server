@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import http from "node:http";
 import { promisify } from "node:util";
 import zlib from "node:zlib";
@@ -38,6 +39,8 @@ export interface Reply {
   /** Already serialized JSON. */
   rawJson?: string;
   body?: string | Buffer;
+  /** A file sent as the body, read as it goes out (a backup can be larger than the memory). `remove`: deleted after. */
+  file?: { path: string; remove?: boolean };
   type?: string;
   headers?: Record<string, string>;
 }
@@ -68,18 +71,50 @@ const CORS: Record<string, string> = {
 const COMPRESSIBLE = /^(application\/json|text\/|application\/javascript|image\/svg)/;
 const GZIP_MIN_BYTES = 4096;
 
+/** Loopback, private, shared (CGNAT) and link-local addresses: where a reverse proxy in front of the server connects from. */
+export const isPrivateAddress = (address: string): boolean => {
+  const v4 = /^(?:::ffff:)?(\d+)\.(\d+)\.\d+\.\d+$/i.exec(address);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return (
+      a === 10 ||
+      a === 127 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254)
+    );
+  }
+  const v6 = address.toLowerCase();
+  return v6 === "::1" || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6);
+};
+
 /**
  * Behind a proxy, the address it saw: the last X-Forwarded-For entry (the ones before it come from the client, which could
- * make them up to dodge the wrong-key limit).
+ * make them up to dodge the wrong-key limit). Only from a connection that can be the proxy (a private address): a client
+ * reaching the server directly can't pick its own address.
  */
 const clientIp = (req: http.IncomingMessage, trustProxy: boolean): string => {
-  if (trustProxy) {
+  const peer = req.socket.remoteAddress ?? "unknown";
+  if (trustProxy && isPrivateAddress(peer)) {
     const forwarded = req.headers["x-forwarded-for"];
     const last = (Array.isArray(forwarded) ? forwarded.join(",") : forwarded)?.split(",").pop()?.trim();
     if (last) return last;
   }
-  return req.socket.remoteAddress ?? "unknown";
+  return peer;
 };
+
+/** The request's URL; null when the target can't be one (`//`, `//a:b`): a 400, not a crash. */
+const requestUrl = (target: string | undefined): URL | null => {
+  try {
+    return new URL(target ?? "/", "http://localhost");
+  } catch {
+    return null;
+  }
+};
+
+/** Open connections at most (long polls included): past it, new ones are dropped instead of using up memory. */
+const MAX_CONNECTIONS = 1000;
 
 /** A malformed escape is the client's mistake (400), not the server's. */
 const decodeParam = (value: string): string => {
@@ -123,9 +158,10 @@ const readBody = (req: http.IncomingMessage, limit: number): Promise<Buffer> =>
   });
 
 export const createHttpServer = (options: HttpOptions): http.Server => {
-  const server = http.createServer(async (req, res) => {
+  const handle = async (req: http.IncomingMessage, res: http.ServerResponse) => {
     const started = Date.now();
-    const url = new URL(req.url ?? "/", "http://localhost");
+    const parsed = requestUrl(req.url);
+    const url = parsed ?? new URL("http://localhost/");
     const method = req.method ?? "GET";
     let bytesIn = 0;
     const closed = new AbortController();
@@ -152,6 +188,32 @@ export const createHttpServer = (options: HttpOptions): http.Server => {
         ...(type && { "Content-Type": type }),
         ...reply.headers,
       };
+      if (reply.file) {
+        const { path: file, remove } = reply.file;
+        const done = () => (remove ? fs.promises.rm(file, { force: true }).catch(() => {}) : undefined);
+        try {
+          const { size } = await fs.promises.stat(file);
+          headers["Content-Length"] = String(size);
+          options.stats.count("bytesOut", size);
+          res.writeHead(status, headers);
+          if (method === "HEAD") {
+            res.end();
+            await done();
+            return;
+          }
+          const stream = fs.createReadStream(file);
+          res.on("close", () => {
+            stream.destroy();
+            void done();
+          });
+          stream.on("error", () => res.destroy());
+          stream.pipe(res);
+        } catch (e) {
+          await done();
+          throw e;
+        }
+        return;
+      }
       const accepts = /\bgzip\b/.test(String(req.headers["accept-encoding"] ?? ""));
       if (accepts && type && COMPRESSIBLE.test(type) && Buffer.byteLength(body) >= GZIP_MIN_BYTES) {
         body = await gzip(body);
@@ -166,6 +228,7 @@ export const createHttpServer = (options: HttpOptions): http.Server => {
     };
 
     try {
+      if (!parsed) throw new HttpError(400, "bad_request", "malformed URL");
       options.stats.count("requests");
       if (method === "OPTIONS") {
         // Chrome asks before a public site calls a private address (a server on the LAN).
@@ -210,7 +273,8 @@ export const createHttpServer = (options: HttpOptions): http.Server => {
     } catch (e) {
       const error = e instanceof HttpError ? e : null;
       const status = error?.status ?? 500;
-      if (status >= 500) {
+      // A client that went away mid-request (its upload cut off) isn't a server error.
+      if (status >= 500 && !closed.signal.aborted) {
         options.stats.count("errors");
         log.error("request failed", { method, path: url.pathname, error: e });
       }
@@ -221,9 +285,17 @@ export const createHttpServer = (options: HttpOptions): http.Server => {
     } finally {
       log.debug("request", { method, path: url.pathname, status: res.statusCode, ms: Date.now() - started, bytesIn });
     }
+  };
+  // Nothing a request does may take the process down (an unhandled rejection exits Node).
+  const server = http.createServer((req, res) => {
+    handle(req, res).catch((e) => {
+      log.error("request failed", { error: e });
+      res.destroy();
+    });
   });
   // Above a reverse proxy's idle timeout, so the proxy closes idle connections first.
   server.keepAliveTimeout = 65_000;
   server.headersTimeout = 70_000;
+  server.maxConnections = MAX_CONNECTIONS;
   return server;
 };

@@ -73,7 +73,9 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
 
   return {
     port: integer(env, "PORT", 8787, 0),
-    host: env.HOST?.trim() || "0.0.0.0",
+    // This computer only, unless asked: a plain install isn't on the network over plain HTTP by accident (the image sets
+    // 0.0.0.0: the container's port is published by Docker).
+    host: env.HOST?.trim() || "127.0.0.1",
     database,
     accessKey: requiredKey(env, "FASTMEMO_ACCESS_KEY"),
     adminKey: key(env, "FASTMEMO_ADMIN_KEY"),

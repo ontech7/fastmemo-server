@@ -11,10 +11,17 @@ services:
     restart: unless-stopped
     ports:
       - "${PORT:-8787}:8787"
-    env_file:
-      - path: .env
-        required: false
     environment:
+      # The server's settings from .env, by name: the other services' secrets there (a tunnel token, an auth key) stay
+      # out of this container.
+      FASTMEMO_ACCESS_KEY: ${FASTMEMO_ACCESS_KEY:-}
+      FASTMEMO_ADMIN_KEY: ${FASTMEMO_ADMIN_KEY:-}
+      TZ: ${TZ:-}
+      MAX_DEVICES: ${MAX_DEVICES:-}
+      MAX_NOTE_MB: ${MAX_NOTE_MB:-}
+      MAX_BODY_MB: ${MAX_BODY_MB:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-}
       PORT: "8787"
       DATABASE_URL: postgres://fastmemo:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/fastmemo
     depends_on:
