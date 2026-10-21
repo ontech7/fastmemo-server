@@ -22,9 +22,9 @@ If you find this project useful, consider [buying me a coffee](https://www.buyme
 
 </div>
 
-Run it on a PC, a NAS, a Raspberry Pi or a VPS, and your [FastMemo](https://fastmemo.losav.cc) devices sync their notes
-through it, live, without anyone else's cloud. Notes are encrypted on your devices, so the server only stores data it can't read
-(titles are the exception: see [Security](#security)). One Docker container, one database file, and a dashboard in your browser.
+Run it on a PC, a NAS, a Raspberry Pi or a VPS, and your [FastMemo](https://fastmemo.losav.cc) devices sync their notes through
+it, live, without anyone else's cloud. Notes are encrypted on your devices, so the server only stores data it can't read (titles
+are the exception: see [Security](#security)). One Docker container, one database file, and a dashboard in your browser.
 
 Rather not run a server? FastMemo also syncs through your own Firebase project: see the
 [Firebase guide](https://fastmemo.losav.cc/en/guides/google-firebase/).
@@ -93,13 +93,19 @@ You need [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on Window
 git clone https://github.com/ontech7/fastmemo-server.git
 cd fastmemo-server
 cp .env.example .env
+```
+
+Open `.env` and set `FASTMEMO_ACCESS_KEY`: the **access key**, the password your devices connect with (16 characters or more).
+Make a random one with `openssl rand -hex 24` (macOS, Linux) or, on any computer with Docker,
+`docker run --rm node:24-alpine node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`. Keep it in a password
+manager: the server never shows it, and without it the server doesn't start. Then:
+
+```sh
 docker compose up -d
 docker compose logs fastmemo
 ```
 
-The server now runs on port **8787**, from the image `ghcr.io/ontech7/fastmemo-server`. The logs show the **access key**, the
-password your devices connect with: keep it in a password manager. To choose your own, set `FASTMEMO_ACCESS_KEY` in `.env` (16
-characters or more, for example from `openssl rand -hex 24`) and run `docker compose up -d` again.
+The server now runs on port **8787**, from the image `ghcr.io/ontech7/fastmemo-server`.
 
 Open http://localhost:8787 and enter the key to see the dashboard: devices, space used, operations per day, warnings, backups.
 `docker compose down` stops the server. Your notes stay in a Docker volume.
@@ -198,25 +204,25 @@ Step by step, and troubleshooting: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 Settings go in `.env` (on Coolify, in Environment Variables). Run `docker compose up -d` after a change.
 
-| Variable                  | Default        | What it does                                                                           |
-| ------------------------- | -------------- | -------------------------------------------------------------------------------------- |
-| `FASTMEMO_ACCESS_KEY`     | generated      | The key devices connect with. At least 16 characters.                                  |
-| `FASTMEMO_ADMIN_KEY`      | the access key | Opens the dashboard.                                                                   |
-| `PORT`                    | `8787`         | The port on your computer. With Docker, `127.0.0.1:8787` hides it from your network.   |
-| `TZ`                      | `UTC`          | The time zone the dashboard counts days in.                                            |
-| `MAX_DEVICES`             | `10`           | How many devices can connect.                                                          |
-| `MAX_NOTE_MB`             | `5`            | The largest note, in MB.                                                               |
-| `MAX_BODY_MB`             | `64`           | The largest request, in MB.                                                            |
-| `TRUST_PROXY`             | `false`        | `true` behind Tailscale Serve, Caddy, Cloudflare Tunnel, nginx, Traefik or Coolify.    |
-| `LOG_LEVEL`               | `info`         | `debug`, `info`, `warn` or `error`.                                                    |
-| `DATABASE_URL`            | SQLite         | `postgres://user:password@host:5432/db` for PostgreSQL.                                |
-| `DATA_DIR`                | `./data`       | Without Docker: where the SQLite file goes (the image uses `/data`).                   |
-| `HOST`                    | `0.0.0.0`      | Without Docker: the address to listen on.                                              |
-| `POSTGRES_PASSWORD`       |                | Only for `docker-compose.postgres.yml`.                                                |
-| `DOMAIN`                  |                | Only for `docker-compose.caddy.yml`.                                                   |
-| `CLOUDFLARE_TUNNEL_TOKEN` |                | Only for `docker-compose.cloudflare.yml`.                                              |
-| `TS_AUTHKEY`              |                | Only for `docker-compose.tailscale.yml`: signs it in, instead of the link in its logs. |
-| `TS_HOSTNAME`             | `fastmemo`     | Only for `docker-compose.tailscale.yml`: the first part of its address.                |
+| Variable                  | Default        | What it does                                                                             |
+| ------------------------- | -------------- | ---------------------------------------------------------------------------------------- |
+| `FASTMEMO_ACCESS_KEY`     | none: required | The key devices connect with, at least 16 characters. The server won't start without it. |
+| `FASTMEMO_ADMIN_KEY`      | the access key | Opens the dashboard.                                                                     |
+| `PORT`                    | `8787`         | The port on your computer. With Docker, `127.0.0.1:8787` hides it from your network.     |
+| `TZ`                      | `UTC`          | The time zone the dashboard counts days in.                                              |
+| `MAX_DEVICES`             | `10`           | How many devices can connect.                                                            |
+| `MAX_NOTE_MB`             | `5`            | The largest note, in MB.                                                                 |
+| `MAX_BODY_MB`             | `64`           | The largest request, in MB.                                                              |
+| `TRUST_PROXY`             | `false`        | `true` behind Tailscale Serve, Caddy, Cloudflare Tunnel, nginx, Traefik or Coolify.      |
+| `LOG_LEVEL`               | `info`         | `debug`, `info`, `warn` or `error`.                                                      |
+| `DATABASE_URL`            | SQLite         | `postgres://user:password@host:5432/db` for PostgreSQL.                                  |
+| `DATA_DIR`                | `./data`       | Without Docker: where the SQLite file goes (the image uses `/data`).                     |
+| `HOST`                    | `0.0.0.0`      | Without Docker: the address to listen on.                                                |
+| `POSTGRES_PASSWORD`       |                | Only for `docker-compose.postgres.yml`.                                                  |
+| `DOMAIN`                  |                | Only for `docker-compose.caddy.yml`.                                                     |
+| `CLOUDFLARE_TUNNEL_TOKEN` |                | Only for `docker-compose.cloudflare.yml`.                                                |
+| `TS_AUTHKEY`              |                | Only for `docker-compose.tailscale.yml`: signs it in, instead of the link in its logs.   |
+| `TS_HOSTNAME`             | `fastmemo`     | Only for `docker-compose.tailscale.yml`: the first part of its address.                  |
 
 ## Backups and restore
 
@@ -226,7 +232,7 @@ Back up from the dashboard (**Download a backup**), or from a script, with the a
 curl -fsS -H "Authorization: Bearer $FASTMEMO_ADMIN_KEY" http://localhost:8787/admin/api/backup -o fastmemo-$(date +%F).db
 ```
 
-Keep backups private: the notes in them are encrypted, but the titles, the device list and a generated access key are not.
+Keep backups private: the notes in them are encrypted, but the titles and the device list are not.
 
 To restore, put the backup in the server's folder and use its name in place of `fastmemo-2026-10-20.db`:
 

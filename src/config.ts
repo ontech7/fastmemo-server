@@ -2,7 +2,7 @@ import path from "node:path";
 
 /*
  * Configuration, from the environment only (docker compose, Coolify, a shell). Every value has a safe default but the
- * access key, which is generated on first start when it's missing (see main.ts).
+ * access key: without one the server doesn't start, so a forgotten setting can't leave it open or put a key in the logs.
  */
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -13,8 +13,8 @@ export interface Config {
   port: number;
   host: string;
   database: DatabaseConfig;
-  /** Enrolls devices. Null: use the one generated on first start. */
-  accessKey: string | null;
+  /** Enrolls devices. Required. */
+  accessKey: string;
   /** Opens the dashboard. Null: the access key does. */
   adminKey: string | null;
   maxDevices: number;
@@ -45,6 +45,17 @@ const key = (env: NodeJS.ProcessEnv, name: string): string | null => {
   return value;
 };
 
+const requiredKey = (env: NodeJS.ProcessEnv, name: string): string => {
+  const value = key(env, name);
+  if (value === null) {
+    throw new ConfigError(
+      `${name} is not set. Set it in .env to a random value of at least ${MIN_KEY_LENGTH} characters (for example the ` +
+        `output of: openssl rand -hex 24), then start the server again.`
+    );
+  }
+  return value;
+};
+
 const MIB = 1024 * 1024;
 
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
@@ -64,7 +75,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     port: integer(env, "PORT", 8787, 0),
     host: env.HOST?.trim() || "0.0.0.0",
     database,
-    accessKey: key(env, "FASTMEMO_ACCESS_KEY"),
+    accessKey: requiredKey(env, "FASTMEMO_ACCESS_KEY"),
     adminKey: key(env, "FASTMEMO_ADMIN_KEY"),
     maxDevices: integer(env, "MAX_DEVICES", 10, 1),
     maxNoteBytes: integer(env, "MAX_NOTE_MB", 5, 1) * MIB,
