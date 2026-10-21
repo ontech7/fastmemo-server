@@ -1,6 +1,6 @@
 # FastMemo Server with SQLite: the simplest setup (PC, NAS, Raspberry Pi, VPS).
 #
-#   cp .env.example .env      # then set FASTMEMO_ACCESS_KEY (or leave it empty: one is generated, see the logs)
+#   cp .env.example .env      # then set FASTMEMO_ACCESS_KEY (required: openssl rand -hex 24)
 #   docker compose up -d
 #   docker compose logs fastmemo
 #

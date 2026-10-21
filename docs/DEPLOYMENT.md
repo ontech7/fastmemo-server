@@ -162,15 +162,15 @@ node --env-file=.env --disable-warning=ExperimentalWarning src/main.ts
 - Each device gets its own token when it joins, and the server keeps only its SHA-256 hash. Removing a device revokes it at
   once.
 - Changing the access key only stops new devices from joining. To lock out a device, remove it.
-- The server never logs note contents. The only key it prints is a generated access key, at each start (it isn't kept with the
-  dashboard's events).
+- The server never logs note contents or keys. The access key comes only from the environment: without one the server doesn't
+  start, so a forgotten setting can't leave it open.
 - The container runs as the unprivileged `node` user and writes only to `/data`.
 - The dashboard has a strict Content Security Policy and can't be framed.
 
 ## Backups
 
-**What's in a SQLite backup:** the whole database. The notes in it stay encrypted, but it also holds the titles, the device list
-and, if the server generated it, the access key. Keep it private, like a password.
+**What's in a SQLite backup:** the whole database. The notes in it stay encrypted, but it also holds the titles and the device
+list. Keep it private, like a password.
 
 **Scheduled backups:** the `curl` command in the README works from cron. Keep the admin key in a file only you can read, not in
 the crontab line.
@@ -220,7 +220,7 @@ Open the server's address in a browser and enter the admin key (`FASTMEMO_ADMIN_
 - The web app and the Windows desktop app need `https://`. The Android, macOS and Linux apps accept `http://` after a warning:
   type `http://` before a name (`http://nas.home.arpa:8787`); without it the app assumes `https://`, except for an IP address,
   `localhost` or a `.local` name.
-- Check the key: `docker compose logs fastmemo` shows it if the server generated it.
+- Check the key: it's `FASTMEMO_ACCESS_KEY` in `.env` (on Coolify, in Environment Variables).
 
 **"Too many attempts".** After 20 wrong keys in 15 minutes from the same address, the server refuses that address for a while.
 Wait a few minutes and check the key.

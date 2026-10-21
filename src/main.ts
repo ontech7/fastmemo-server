@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 
 import { createApp } from "./app.ts";
@@ -14,27 +14,17 @@ const MAINTENANCE_MS = 60 * 60 * 1000;
 
 const version: string = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
-/** The instance id (new database: new id), and the access key generated when none is configured. */
-const prepare = async (db: Database, generateKey: boolean): Promise<{ instance: string; generatedKey: string | null }> =>
+/** The instance id (new database: new id). */
+const prepare = async (db: Database): Promise<string> =>
   db.write(async (sql) => {
-    const read = async (key: string) =>
-      (await sql.get<{ value: string }>(`SELECT value FROM meta WHERE key = ?`, [key]))?.value;
-    const store = (key: string, value: string) => sql.run(`INSERT INTO meta (key, value) VALUES (?, ?)`, [key, value]);
+    // Servers before 1.0.0 generated an access key when none was set and kept it here, where backups have it in clear.
+    await sql.run(`DELETE FROM meta WHERE key = 'access_key'`);
 
-    let instance = await read("instance_id");
-    if (!instance) {
-      instance = randomUUID();
-      await store("instance_id", instance);
-    }
-    let generatedKey: string | null = null;
-    if (generateKey) {
-      generatedKey = (await read("access_key")) ?? null;
-      if (!generatedKey) {
-        generatedKey = randomBytes(24).toString("base64url");
-        await store("access_key", generatedKey);
-      }
-    }
-    return { instance, generatedKey };
+    const row = await sql.get<{ value: string }>(`SELECT value FROM meta WHERE key = 'instance_id'`);
+    if (row) return row.value;
+    const instance = randomUUID();
+    await sql.run(`INSERT INTO meta (key, value) VALUES ('instance_id', ?)`, [instance]);
+    return instance;
   });
 
 const main = async () => {
@@ -52,10 +42,16 @@ const main = async () => {
 
   const db = config.database.driver === "sqlite" ? openSqlite(config.database.path) : await openPostgres(config.database.url);
   await migrate(db);
-  const { instance, generatedKey } = await prepare(db, config.accessKey === null);
-  const accessKey = config.accessKey ?? generatedKey!;
+  const instance = await prepare(db);
 
-  const app = createApp({ config, db, accessKey, adminKey: config.adminKey ?? accessKey, instance, version });
+  const app = createApp({
+    config,
+    db,
+    accessKey: config.accessKey,
+    adminKey: config.adminKey ?? config.accessKey,
+    instance,
+    version,
+  });
   onRecord((record) => app.service.recordEvent(record));
   const port = await app.listen(config.port, config.host);
 
@@ -65,22 +61,6 @@ const main = async () => {
     database: config.database.driver === "sqlite" ? `sqlite ${config.database.path}` : "postgres",
     instance,
   });
-  if (!config.accessKey) {
-    // Printed, not logged: it isn't kept with the events.
-    console.log(
-      [
-        "",
-        "  No FASTMEMO_ACCESS_KEY is set: this server generated one (it stays the same across restarts).",
-        "  Enter it in the app (Settings > Cloud Sync > FastMemo Server) to connect a device, and to open the dashboard",
-        "  (this server's address in a browser):",
-        "",
-        `      ${accessKey}`,
-        "",
-        "  To choose your own, set FASTMEMO_ACCESS_KEY (16+ characters) and restart.",
-        "",
-      ].join("\n")
-    );
-  }
 
   const flush = setInterval(() => app.service.flush().catch((e) => log.error("flush failed", { error: e })), FLUSH_MS);
   const maintain = () => app.service.maintenance().catch((e) => log.error("maintenance failed", { error: e }));

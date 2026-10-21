@@ -8,7 +8,7 @@ import type { Database } from "./db.ts";
  *   devices   a registered device: its token (hashed), its cursor in the change feed, presence
  *   vault     the vault doc (ADR-012 in the app: wrapped keys only, never a usable key)
  *   counters  the sequence
- *   meta      instance id, schema version, the generated access key
+ *   meta      instance id, schema version
  *   stats     daily counters for the dashboard
  *   events    recent warnings and errors for the dashboard
  */

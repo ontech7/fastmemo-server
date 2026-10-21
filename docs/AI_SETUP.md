@@ -71,8 +71,9 @@ cp .env.example .env
 
 Then edit `.env`:
 
-- `FASTMEMO_ACCESS_KEY`: a random key, e.g. the output of `openssl rand -hex 24`. If you can't generate one (no `openssl`),
-  leave it empty: the server generates one and prints it in `docker compose logs fastmemo`.
+- `FASTMEMO_ACCESS_KEY` (required: the server doesn't start without it): a random key, the output of `openssl rand -hex 24`, or
+  with no `openssl`: `docker run --rm node:24-alpine node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`.
+  Tell the person to keep it in a password manager: the server never shows it.
 - `TZ`: the person's time zone (e.g. `Europe/Rome`, `America/New_York`). On Linux, `timedatectl show -p Timezone --value`; on
   macOS, `readlink /etc/localtime | sed 's|.*zoneinfo/||'`.
 - `PORT`: `<port>` if 8787 was taken. With Tailscale, on a VPS, or for "only this computer": `127.0.0.1:<port>`, so the server
@@ -197,7 +198,7 @@ Tell the person, in plain words:
    Without the password or the recovery key, nobody can read the notes, not even them.
 4. **The server runs while this machine is on** (and, on a Mac or PC, while Docker Desktop runs).
 5. **Backups**: the dashboard's **Download a backup** button, or the script in the [README](../README.md#backups-and-restore). A
-   backup holds the titles and, if the server generated it, the access key: keep it private.
+   backup holds the titles and the device list: keep it private.
 6. **Updating**, in the `fastmemo-server` folder: `git pull`, then `docker compose pull` and `docker compose up -d`. If
    `docker compose pull` fails (`denied`, `not found`), run `docker compose up -d --build` instead: it builds the new version
    from the folder.
