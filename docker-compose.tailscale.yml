@@ -10,7 +10,7 @@
 # address public (Tailscale Funnel, see the README).
 services:
   tailscale:
-    image: tailscale/tailscale:latest
+    image: tailscale/tailscale:v1.104.2
     container_name: fastmemo-tailscale
     hostname: ${TS_HOSTNAME:-fastmemo}
     restart: unless-stopped
@@ -31,10 +31,17 @@ services:
     restart: unless-stopped
     # Shares the Tailscale container's network: Tailscale serves it at 127.0.0.1:8787, and no port is published.
     network_mode: service:tailscale
-    env_file:
-      - path: .env
-        required: false
     environment:
+      # The server's settings from .env, by name: the other services' secrets there (a tunnel token, an auth key) stay
+      # out of this container.
+      FASTMEMO_ACCESS_KEY: ${FASTMEMO_ACCESS_KEY:-}
+      FASTMEMO_ADMIN_KEY: ${FASTMEMO_ADMIN_KEY:-}
+      TZ: ${TZ:-}
+      MAX_DEVICES: ${MAX_DEVICES:-}
+      MAX_NOTE_MB: ${MAX_NOTE_MB:-}
+      MAX_BODY_MB: ${MAX_BODY_MB:-}
+      LOG_LEVEL: ${LOG_LEVEL:-}
+      DATABASE_URL: ${DATABASE_URL:-}
       PORT: "8787"
       DATA_DIR: /data
       TRUST_PROXY: "true"

@@ -1,3 +1,4 @@
+import os from "node:os";
 import type { PoolClient } from "pg";
 
 import { createMutex, type Database, type Param, type Sql } from "./db.ts";
@@ -59,6 +60,7 @@ export const openPostgres = async (url: string): Promise<Database> => {
 
   return {
     driver: "postgres",
+    scratchDir: os.tmpdir(),
     read: (fn) => transaction("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", false, fn),
     write: (fn) => writes(() => transaction("BEGIN", true, fn)),
     sizeBytes: async () => {

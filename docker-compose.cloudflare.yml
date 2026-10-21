@@ -12,10 +12,17 @@ services:
     build: .
     container_name: fastmemo-server
     restart: unless-stopped
-    env_file:
-      - path: .env
-        required: false
     environment:
+      # The server's settings from .env, by name: the other services' secrets there (a tunnel token, an auth key) stay
+      # out of this container.
+      FASTMEMO_ACCESS_KEY: ${FASTMEMO_ACCESS_KEY:-}
+      FASTMEMO_ADMIN_KEY: ${FASTMEMO_ADMIN_KEY:-}
+      TZ: ${TZ:-}
+      MAX_DEVICES: ${MAX_DEVICES:-}
+      MAX_NOTE_MB: ${MAX_NOTE_MB:-}
+      MAX_BODY_MB: ${MAX_BODY_MB:-}
+      LOG_LEVEL: ${LOG_LEVEL:-}
+      DATABASE_URL: ${DATABASE_URL:-}
       PORT: "8787"
       DATA_DIR: /data
       TRUST_PROXY: "true"
@@ -23,7 +30,7 @@ services:
       - fastmemo-data:/data
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.10.3
     container_name: fastmemo-cloudflared
     restart: unless-stopped
     command: tunnel --no-autoupdate run

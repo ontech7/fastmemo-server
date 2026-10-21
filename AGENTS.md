@@ -49,6 +49,12 @@ docs/           -> PROTOCOL.md (the API), DEPLOYMENT.md (setups, backups, troubl
 6. **Never put inline scripts or styles** in `public/`: the CSP forbids them. Values from devices go in with `textContent`,
    never `innerHTML`.
 7. **Never read a path from the URL off the disk**: the dashboard serves only the files loaded from `public/` at start.
+8. **Never let a request throw outside the handler's `try`** (parsing the URL included): an unhandled rejection exits Node.
+   Before 1.0.0 a plain `GET //`, with no key, took the server down.
+9. **Never load a file or a database dump into memory to send it**: stream it (`Reply.file`). A backup can be bigger than a
+   Raspberry Pi's memory.
+10. **Never trust `X-Forwarded-For` from a public address**: only a proxy (a private address) may set the client's address, or a
+    client picks its own and dodges the wrong-key limit.
 
 ### ALWAYS
 

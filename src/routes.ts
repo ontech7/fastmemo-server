@@ -113,7 +113,7 @@ export const apiRoutes = (service: Service, info: ServerInfo): Route[] => [
     handler: async (req) => {
       const wait = Math.min(Math.max(Number(req.query.get("wait")) || 0, 0), MAX_WAIT_S) * 1000;
       const version = req.query.get("v");
-      if (version) await service.waitForChange(version, wait, req.signal);
+      if (version) await service.waitForChange(version, wait, req.signal, req.device);
       return { json: await service.snapshot(req.device, req.query.get("p")) };
     },
   },

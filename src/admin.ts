@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -122,20 +123,21 @@ export const adminRoutes = (ctx: AdminContext): Route[] => {
         if (ctx.db.driver !== "sqlite") {
           throw new HttpError(400, "not_supported", "Back up a Postgres database with pg_dump");
         }
-        const file = path.join(os.tmpdir(), `fastmemo-backup-${process.pid}-${Date.now()}.db`);
+        // Next to the database, streamed out and then removed: a large database never sits in memory.
+        const file = path.join(ctx.db.scratchDir, `fastmemo-backup-${randomBytes(8).toString("hex")}.db`);
         try {
           await ctx.db.backup(file);
-          const body = fs.readFileSync(file);
-          const now = new Date();
-          const stamp = `${dayOf(now.getTime()).replace(/-/g, "")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
-          return {
-            body,
-            type: "application/octet-stream",
-            headers: { "Content-Disposition": `attachment; filename="fastmemo-${stamp}.db"` },
-          };
-        } finally {
+        } catch (e) {
           fs.rmSync(file, { force: true });
+          throw e;
         }
+        const now = new Date();
+        const stamp = `${dayOf(now.getTime()).replace(/-/g, "")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+        return {
+          file: { path: file, remove: true },
+          type: "application/octet-stream",
+          headers: { "Content-Disposition": `attachment; filename="fastmemo-${stamp}.db"` },
+        };
       },
     },
   ];
