@@ -28,19 +28,21 @@ Errors are `{"error": "<code>", "message": "<text>"}` with codes `bad_request` /
 
 ## Server
 
-| Request          | Auth | Response                                                                              |
-| ---------------- | ---- | ------------------------------------------------------------------------------------- |
-| `GET /v1/health` | none | `{ "ok": true }`                                                                      |
-| `GET /v1/info`   | key  | `{ "server": "fastmemo-server", "version", "protocol": 1, "instance", "maxDevices" }` |
+| Request          | Auth | Response                                                                                              |
+| ---------------- | ---- | ----------------------------------------------------------------------------------------------------- |
+| `GET /v1/health` | none | `{ "ok": true }`                                                                                      |
+| `GET /v1/info`   | key  | `{ "server": "fastmemo-server", "version", "protocol": 1, "instance", "maxDevices", "maxNoteBytes" }` |
 
-`instance` changes when the database is new: a different server, or the same one reset.
+`instance` changes when the database is new: a different server, or the same one reset. `maxNoteBytes` (`MAX_NOTE_MB`) is the
+largest note a push may carry, measured as the UTF-8 bytes of the note's JSON as pushed (encrypted): the app doesn't send a note
+over it and makes it device-only instead. An app that doesn't read it gets the note refused (`rejected`) as before.
 
 ## Devices
 
 | Request                                 | Auth   | Body / response                                                              |
 | --------------------------------------- | ------ | ---------------------------------------------------------------------------- |
 | `POST /v1/devices`                      | key    | `{ uuid, modelName, brand }` → `201 { token }`; `403 device_limit` when full |
-| `GET /v1/devices`                       | member | `{ devices: Device[], maxDevices }`                                          |
+| `GET /v1/devices`                       | member | `{ devices: Device[], maxDevices, maxNoteBytes }`                            |
 | `DELETE /v1/devices/:uuid`              | member | `204` (any device may remove any device, as in the app's Manage devices)     |
 | `POST /v1/devices/:uuid/last-sync`      | device | `204` (only for itself)                                                      |
 | `PUT /v1/devices/:uuid/presence`        | device | `{ noteId: string \| null, at: number }` → `204`                             |

@@ -23,6 +23,7 @@ describe("auth", () => {
     assert.equal(res.body.protocol, 1);
     assert.equal(res.body.instance, "test-instance");
     assert.equal(res.body.maxDevices, 5);
+    assert.equal(res.body.maxNoteBytes, 1024 * 1024);
   });
 
   test("a device's routes need its token; an unknown token says so", async () => {

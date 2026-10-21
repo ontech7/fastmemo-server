@@ -139,6 +139,10 @@ export class Service {
     return this.limits.maxDevices;
   }
 
+  get maxNoteBytes(): number {
+    return this.limits.maxNoteBytes;
+  }
+
   /** A committed change devices can see: wake the long polls. */
   private changed(): void {
     this.viewCache = null;

@@ -204,25 +204,25 @@ Step by step, and troubleshooting: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 Settings go in `.env` (on Coolify, in Environment Variables). Run `docker compose up -d` after a change.
 
-| Variable                  | Default        | What it does                                                                             |
-| ------------------------- | -------------- | ---------------------------------------------------------------------------------------- |
-| `FASTMEMO_ACCESS_KEY`     | none: required | The key devices connect with, at least 16 characters. The server won't start without it. |
-| `FASTMEMO_ADMIN_KEY`      | the access key | Opens the dashboard.                                                                     |
-| `PORT`                    | `8787`         | The port on your computer. With Docker, `127.0.0.1:8787` hides it from your network.     |
-| `TZ`                      | `UTC`          | The time zone the dashboard counts days in.                                              |
-| `MAX_DEVICES`             | `10`           | How many devices can connect.                                                            |
-| `MAX_NOTE_MB`             | `5`            | The largest note, in MB.                                                                 |
-| `MAX_BODY_MB`             | `64`           | The largest request, in MB.                                                              |
-| `TRUST_PROXY`             | `false`        | `true` behind Tailscale Serve, Caddy, Cloudflare Tunnel, nginx, Traefik or Coolify.      |
-| `LOG_LEVEL`               | `info`         | `debug`, `info`, `warn` or `error`.                                                      |
-| `DATABASE_URL`            | SQLite         | `postgres://user:password@host:5432/db` for PostgreSQL.                                  |
-| `DATA_DIR`                | `./data`       | Without Docker: where the SQLite file goes (the image uses `/data`).                     |
-| `HOST`                    | `0.0.0.0`      | Without Docker: the address to listen on.                                                |
-| `POSTGRES_PASSWORD`       |                | Only for `docker-compose.postgres.yml`.                                                  |
-| `DOMAIN`                  |                | Only for `docker-compose.caddy.yml`.                                                     |
-| `CLOUDFLARE_TUNNEL_TOKEN` |                | Only for `docker-compose.cloudflare.yml`.                                                |
-| `TS_AUTHKEY`              |                | Only for `docker-compose.tailscale.yml`: signs it in, instead of the link in its logs.   |
-| `TS_HOSTNAME`             | `fastmemo`     | Only for `docker-compose.tailscale.yml`: the first part of its address.                  |
+| Variable                  | Default        | What it does                                                                                                    |
+| ------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------- |
+| `FASTMEMO_ACCESS_KEY`     | none: required | The key devices connect with, at least 16 characters. The server won't start without it.                        |
+| `FASTMEMO_ADMIN_KEY`      | the access key | Opens the dashboard.                                                                                            |
+| `PORT`                    | `8787`         | The port on your computer. With Docker, `127.0.0.1:8787` hides it from your network.                            |
+| `TZ`                      | `UTC`          | The time zone the dashboard counts days in.                                                                     |
+| `MAX_DEVICES`             | `10`           | How many devices can connect.                                                                                   |
+| `MAX_NOTE_MB`             | `5`            | The largest note, in MB, encrypted: its text can be about 3/4 of it. Bigger notes stay offline on their device. |
+| `MAX_BODY_MB`             | `64`           | The largest request, in MB.                                                                                     |
+| `TRUST_PROXY`             | `false`        | `true` behind Tailscale Serve, Caddy, Cloudflare Tunnel, nginx, Traefik or Coolify.                             |
+| `LOG_LEVEL`               | `info`         | `debug`, `info`, `warn` or `error`.                                                                             |
+| `DATABASE_URL`            | SQLite         | `postgres://user:password@host:5432/db` for PostgreSQL.                                                         |
+| `DATA_DIR`                | `./data`       | Without Docker: where the SQLite file goes (the image uses `/data`).                                            |
+| `HOST`                    | `0.0.0.0`      | Without Docker: the address to listen on.                                                                       |
+| `POSTGRES_PASSWORD`       |                | Only for `docker-compose.postgres.yml`.                                                                         |
+| `DOMAIN`                  |                | Only for `docker-compose.caddy.yml`.                                                                            |
+| `CLOUDFLARE_TUNNEL_TOKEN` |                | Only for `docker-compose.cloudflare.yml`.                                                                       |
+| `TS_AUTHKEY`              |                | Only for `docker-compose.tailscale.yml`: signs it in, instead of the link in its logs.                          |
+| `TS_HOSTNAME`             | `fastmemo`     | Only for `docker-compose.tailscale.yml`: the first part of its address.                                         |
 
 ## Backups and restore
 
