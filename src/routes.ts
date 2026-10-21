@@ -45,6 +45,7 @@ export const apiRoutes = (service: Service, info: ServerInfo): Route[] => [
         protocol: PROTOCOL,
         instance: info.instance,
         maxDevices: service.maxDevices,
+        maxNoteBytes: service.maxNoteBytes,
       },
     }),
   },
@@ -60,8 +61,10 @@ export const apiRoutes = (service: Service, info: ServerInfo): Route[] => [
     method: "GET",
     pattern: /^\/v1\/devices$/,
     auth: "member",
-    // With the limit: a device that didn't connect in this run (no /v1/info handshake) still knows it.
-    handler: async () => ({ json: { devices: await service.listDevices(), maxDevices: service.maxDevices } }),
+    // With the limits: a device that didn't connect in this run (no /v1/info handshake) still knows them.
+    handler: async () => ({
+      json: { devices: await service.listDevices(), maxDevices: service.maxDevices, maxNoteBytes: service.maxNoteBytes },
+    }),
   },
   {
     method: "DELETE",
