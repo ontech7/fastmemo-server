@@ -1,0 +1,36 @@
+# FastMemo Server behind a Cloudflare Tunnel: a public HTTPS address on your domain, with no port opened on the router. For a
+# home server behind a router you can't configure (or CGNAT). The domain must be on Cloudflare.
+#
+#   cp .env.example .env      # set CLOUDFLARE_TUNNEL_TOKEN (the tunnel's token, from the Cloudflare dashboard)
+#   docker compose -f docker-compose.cloudflare.yml up -d
+#
+# In the tunnel's routes, publish your hostname (e.g. notes.example.com) with the service http://fastmemo:8787.
+# The app connects to https://notes.example.com. Cloudflare decrypts the traffic on its servers: see the README's HTTPS section.
+services:
+  fastmemo:
+    image: ghcr.io/ontech7/fastmemo-server:latest # downloaded, or built from this folder (see docker-compose.yml)
+    build: .
+    container_name: fastmemo-server
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PORT: "8787"
+      DATA_DIR: /data
+      TRUST_PROXY: "true"
+    volumes:
+      - fastmemo-data:/data
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: fastmemo-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      - fastmemo
+
+volumes:
+  fastmemo-data:

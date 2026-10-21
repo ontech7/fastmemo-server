@@ -54,7 +54,7 @@ flowchart LR
   browser["A browser<br/>(you, with the admin key)"]
 
   subgraph host["Your PC, NAS, Pi or VPS"]
-    https["HTTPS<br/>Tailscale · Caddy · Coolify"]
+    https["HTTPS<br/>Tailscale · Caddy · Cloudflare · Coolify"]
     server["fastmemo-server<br/>sync API + dashboard<br/>(one Docker container)"]
     db[("SQLite file<br/>or PostgreSQL")]
   end
@@ -148,10 +148,37 @@ internet.
 2. On the server, run `sudo tailscale serve --bg 8787`. It prints your address, like `https://raspberrypi.your-tailnet.ts.net`.
 3. Set `TRUST_PROXY=true` in `.env` and run `docker compose up -d`.
 
+**Can't install Tailscale on the server** (a NAS, for example)? Run it in a container next to the server instead. Turn on
+**HTTPS Certificates** in the Tailscale admin (**DNS** page), then:
+
+```sh
+docker compose -f docker-compose.tailscale.yml up -d
+docker compose -f docker-compose.tailscale.yml logs tailscale
+```
+
+Open the link after `To authenticate, visit:` and sign in. Your address is `https://fastmemo.your-tailnet.ts.net`.
+
+**A device without Tailscale** (the web app on a computer that isn't yours)? `sudo tailscale funnel --bg 8787` makes the same
+address public, on the internet. Anyone can then reach the server, so use a long access key. To make it private again:
+`sudo tailscale funnel reset`, then `sudo tailscale serve --bg 8787`.
+
 ### Your own domain (Caddy)
 
 You need a domain that points to the server, and ports 80 and 443 open. Set `DOMAIN=notes.example.com` in `.env`, then run
 `docker compose -f docker-compose.caddy.yml up -d`. Caddy gets the certificate, and your address is `https://notes.example.com`.
+
+### Your own domain, no open ports (Cloudflare Tunnel)
+
+You need a domain on [Cloudflare](https://www.cloudflare.com) (the free plan is enough). Nothing is opened on your router.
+
+1. In the Cloudflare dashboard, go to **Networking → Tunnels → Create a tunnel**. Copy the token from the command it shows (the
+   long text after `--token`).
+2. Set `CLOUDFLARE_TUNNEL_TOKEN=<that token>` in `.env`, then run `docker compose -f docker-compose.cloudflare.yml up -d`.
+3. In the tunnel, **Routes → Add route → Published application**: your hostname (e.g. `notes` on `example.com`) and the service
+   URL `http://fastmemo:8787`.
+
+Your address is `https://notes.example.com`. Cloudflare decrypts the traffic on its servers, so it can see what plain HTTP would
+show (note titles, device credentials); the notes' content stays end-to-end encrypted.
 
 ## Other setups
 
@@ -171,22 +198,25 @@ Step by step, and troubleshooting: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 Settings go in `.env` (on Coolify, in Environment Variables). Run `docker compose up -d` after a change.
 
-| Variable              | Default        | What it does                                                                         |
-| --------------------- | -------------- | ------------------------------------------------------------------------------------ |
-| `FASTMEMO_ACCESS_KEY` | generated      | The key devices connect with. At least 16 characters.                                |
-| `FASTMEMO_ADMIN_KEY`  | the access key | Opens the dashboard.                                                                 |
-| `PORT`                | `8787`         | The port on your computer. With Docker, `127.0.0.1:8787` hides it from your network. |
-| `TZ`                  | `UTC`          | The time zone the dashboard counts days in.                                          |
-| `MAX_DEVICES`         | `10`           | How many devices can connect.                                                        |
-| `MAX_NOTE_MB`         | `5`            | The largest note, in MB.                                                             |
-| `MAX_BODY_MB`         | `64`           | The largest request, in MB.                                                          |
-| `TRUST_PROXY`         | `false`        | `true` behind Tailscale Serve, Caddy, nginx, Traefik or Coolify.                     |
-| `LOG_LEVEL`           | `info`         | `debug`, `info`, `warn` or `error`.                                                  |
-| `DATABASE_URL`        | SQLite         | `postgres://user:password@host:5432/db` for PostgreSQL.                              |
-| `DATA_DIR`            | `./data`       | Without Docker: where the SQLite file goes (the image uses `/data`).                 |
-| `HOST`                | `0.0.0.0`      | Without Docker: the address to listen on.                                            |
-| `POSTGRES_PASSWORD`   |                | Only for `docker-compose.postgres.yml`.                                              |
-| `DOMAIN`              |                | Only for `docker-compose.caddy.yml`.                                                 |
+| Variable                  | Default        | What it does                                                                           |
+| ------------------------- | -------------- | -------------------------------------------------------------------------------------- |
+| `FASTMEMO_ACCESS_KEY`     | generated      | The key devices connect with. At least 16 characters.                                  |
+| `FASTMEMO_ADMIN_KEY`      | the access key | Opens the dashboard.                                                                   |
+| `PORT`                    | `8787`         | The port on your computer. With Docker, `127.0.0.1:8787` hides it from your network.   |
+| `TZ`                      | `UTC`          | The time zone the dashboard counts days in.                                            |
+| `MAX_DEVICES`             | `10`           | How many devices can connect.                                                          |
+| `MAX_NOTE_MB`             | `5`            | The largest note, in MB.                                                               |
+| `MAX_BODY_MB`             | `64`           | The largest request, in MB.                                                            |
+| `TRUST_PROXY`             | `false`        | `true` behind Tailscale Serve, Caddy, Cloudflare Tunnel, nginx, Traefik or Coolify.    |
+| `LOG_LEVEL`               | `info`         | `debug`, `info`, `warn` or `error`.                                                    |
+| `DATABASE_URL`            | SQLite         | `postgres://user:password@host:5432/db` for PostgreSQL.                                |
+| `DATA_DIR`                | `./data`       | Without Docker: where the SQLite file goes (the image uses `/data`).                   |
+| `HOST`                    | `0.0.0.0`      | Without Docker: the address to listen on.                                              |
+| `POSTGRES_PASSWORD`       |                | Only for `docker-compose.postgres.yml`.                                                |
+| `DOMAIN`                  |                | Only for `docker-compose.caddy.yml`.                                                   |
+| `CLOUDFLARE_TUNNEL_TOKEN` |                | Only for `docker-compose.cloudflare.yml`.                                              |
+| `TS_AUTHKEY`              |                | Only for `docker-compose.tailscale.yml`: signs it in, instead of the link in its logs. |
+| `TS_HOSTNAME`             | `fastmemo`     | Only for `docker-compose.tailscale.yml`: the first part of its address.                |
 
 ## Backups and restore
 

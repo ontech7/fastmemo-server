@@ -12,8 +12,8 @@ adds what you need on top: what to ask, what to check, what never to do, and how
 1. **Never delete the data.** No `docker compose down -v`, no `docker volume rm` or `docker volume prune`, no deleting `data/`
    or `*.db` files. The notes live there. `docker compose down` (without `-v`) is safe.
 2. **Never put plain `http://` on the internet.** On a VPS or any machine reachable from the internet, the server goes behind
-   HTTPS (Tailscale, Caddy or Coolify), and port 8787 is published on `127.0.0.1` only. Docker publishes ports past firewalls
-   like `ufw`, so a firewall rule isn't enough.
+   HTTPS (Tailscale, Caddy, Cloudflare Tunnel or Coolify), and port 8787 is published on `127.0.0.1` only. Docker publishes
+   ports past firewalls like `ufw`, so a firewall rule isn't enough.
 3. **Never ask for the encryption password or the recovery key.** The person chooses them in the app; they never reach the
    server, and you don't need them.
 4. **Never paste the access key anywhere but the person's machine** (`.env`) and your final message to them. Don't put it in a
@@ -30,8 +30,13 @@ Ask only what you can't find out yourself:
    they only connect to `https://` addresses. (Android, macOS and Linux also accept `http://`, after a warning.)
 3. **How should the devices reach it?** Recommend in this order:
    - **Tailscale** (easiest): a private network with HTTPS, no domain, nothing open to the internet, and it works away from home
-     too. Every device installs the Tailscale app and signs in to the same account.
+     too. Every device installs the Tailscale app and signs in to the same account. On a NAS, or wherever Tailscale can't be
+     installed, it runs in a container instead. If one device can't run Tailscale (the web app on a computer that isn't theirs),
+     Funnel makes the address public: only when they ask for it.
    - **Their own domain, with Caddy**: they have a domain, and can point it to the server and open ports 80 and 443.
+   - **Their own domain, with Cloudflare Tunnel**: the domain is on Cloudflare, and they can't or won't open ports (CGNAT, a
+     router they don't control). Tell them first that Cloudflare can see the traffic (titles and device credentials, not the
+     notes' content).
    - **Coolify**: they already run Coolify.
    - **The same Wi-Fi, to try it**: plain `http://` on the home network, for Android, macOS and Linux only. A phone that leaves
      the house keeps using that address on other networks, unencrypted: fine to try it, Tailscale for every day. Never on a VPS.
@@ -90,6 +95,27 @@ folder instead: that's expected. It takes a few minutes and prints a lot, npm wa
 4. `sudo tailscale serve --bg <port>`. It prints the address, like `https://raspberrypi.tail1234.ts.net`. If it asks to enable
    HTTPS certificates or MagicDNS, it prints a link: **the person opens it** and enables them, then run the command again.
 5. The person installs Tailscale on every device that will use FastMemo, signed in to the same account.
+6. Tell the person to turn off key expiry for the server (admin, **Machines**, the server's menu, **Disable key expiry**):
+   otherwise Tailscale signs it out after 180 days.
+
+### Tailscale in a container (a NAS, or no Tailscale on the machine)
+
+1. The person turns on **HTTPS Certificates** and MagicDNS on the **DNS** page of the Tailscale admin
+   ([login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns)).
+2. `docker compose -f docker-compose.tailscale.yml up -d`
+3. `docker compose -f docker-compose.tailscale.yml logs tailscale` shows a link after `To authenticate, visit:`. **The person
+   opens it** and signs in. (Or, if they gave you an auth key, set `TS_AUTHKEY` in `.env` before step 2.)
+4. The address is `https://fastmemo.<their-tailnet>.ts.net`: the **Machines** page of the admin shows the full name, and
+   `docker compose -f docker-compose.tailscale.yml exec tailscale tailscale status` lists it.
+5. As above: Tailscale on every device, and key expiry off for the server.
+
+With this compose file, add `-f docker-compose.tailscale.yml` to every `docker compose` command below.
+
+### Tailscale Funnel (only when they ask)
+
+On top of Tailscale: `sudo tailscale funnel --bg <port>` (in a container: `AllowFunnel` to `true` in `tailscale/serve.json`).
+The first time, it prints a link to allow Funnel: **the person opens it**. The address stays the same, now public. Make sure
+`FASTMEMO_ACCESS_KEY` is long (`openssl rand -hex 24`).
 
 ### Caddy (their own domain)
 
@@ -100,6 +126,19 @@ folder instead: that's expected. It takes a few minutes and prints a lot, npm wa
 4. The address is `https://notes.example.com`. The first start takes a minute while Caddy gets the certificate.
 
 With this compose file, add `-f docker-compose.caddy.yml` to every `docker compose` command below.
+
+### Cloudflare Tunnel (their own domain, no open ports)
+
+1. **The person** creates the tunnel in the Cloudflare dashboard: **Networking → Tunnels → Create a tunnel**, any name, then
+   Docker. They give you the long text after `--token` in the command it shows. It's a secret: it goes in `.env` only.
+2. Set `CLOUDFLARE_TUNNEL_TOKEN=<that text>` in `.env`, then `docker compose -f docker-compose.cloudflare.yml up -d`.
+3. `docker compose -f docker-compose.cloudflare.yml logs cloudflared` should show `Registered tunnel connection`. The dashboard
+   now shows the tunnel as connected.
+4. **The person** adds the route in the tunnel: **Routes → Add route → Published application**, a subdomain (e.g. `notes`),
+   their domain, and the service URL `http://fastmemo:8787` (exactly this: `fastmemo` is the server's name inside Docker).
+5. The address is `https://notes.example.com`.
+
+With this compose file, add `-f docker-compose.cloudflare.yml` to every `docker compose` command below.
 
 ### Coolify
 
@@ -133,7 +172,8 @@ curl -fsS http://127.0.0.1:<port>/v1/health         # {"ok":true}
 curl -fsS -H "X-Access-Key: <the key>" http://127.0.0.1:<port>/v1/info   # ..."protocol":1...
 ```
 
-With Caddy or Coolify, port 8787 isn't published: skip the two `curl` lines above. Then, with the address from step 4:
+With Caddy, Coolify, Cloudflare Tunnel or Tailscale in a container, port 8787 isn't published: skip the two `curl` lines above.
+Then, with the address from step 4:
 
 ```sh
 curl -fsS -H "X-Access-Key: <the key>" <address>/v1/info    # ..."protocol":1...
@@ -171,6 +211,10 @@ Tell the person, in plain words:
 | `container name "/fastmemo-server" is already in use`        | FastMemo Server is already installed on this machine (see [step 2](#2-check-the-machine)): ask before going on.                   |
 | `permission denied` on the Docker socket                     | The user isn't in the `docker` group yet: `sudo usermod -aG docker $USER`, then log out and back in.                              |
 | `/v1/health` works on the server but not from outside        | The HTTPS step: Tailscale not serving (`tailscale serve status`), DNS not pointing to the server, or ports 80/443 closed.         |
+| `required variable CLOUDFLARE_TUNNEL_TOKEN is missing`       | Set the token in `.env`, then run the command again.                                                                              |
+| `Provided Tunnel token is not valid` (logs of `cloudflared`) | The token was copied wrong: copy it again from the tunnel in the Cloudflare dashboard, then `up -d` again.                        |
+| Cloudflare: the page shows a 502 or "Bad gateway"            | The route's service URL is wrong: it must be `http://fastmemo:8787`.                                                              |
+| Tailscale container: the address doesn't answer              | Not signed in (the link in its logs), or HTTPS Certificates off on the admin's DNS page.                                          |
 | The app says the key is wrong                                | Compare it with `.env` (or the logs). After 20 wrong tries in 15 minutes, the address is refused for a while: wait a few minutes. |
 | The web app or the Windows app can't connect to `http://`    | They need HTTPS: set up Tailscale or Caddy.                                                                                       |
 

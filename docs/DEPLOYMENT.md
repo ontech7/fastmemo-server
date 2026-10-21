@@ -47,12 +47,67 @@ mind for the restore steps).
 - `TRUST_PROXY=true` lets the server see which device sent each request, for the logs and the wrong-key limit. Without it, every
   request seems to come from the same local address.
 - To keep the server off your home network (reachable through Tailscale only), also set `PORT=127.0.0.1:8787` in `.env`.
+- Tailscale signs a machine out after 180 days by default. For a server, turn that off: on the **Machines** page of the admin,
+  open the server's menu and choose **Disable key expiry**.
+
+### Tailscale in a container
+
+`docker-compose.tailscale.yml` runs Tailscale in its own container, and the server shares its network: no Tailscale on the
+computer, no published port. The dashboard and the API are only at the `ts.net` address.
+
+- **HTTPS certificates:** turn on **HTTPS Certificates** (and MagicDNS) on the **DNS** page of the Tailscale admin before the
+  first start. The container can't ask for it the way `tailscale serve` does.
+- **Signing in:** leave `TS_AUTHKEY` empty and open the link after `To authenticate, visit:` in
+  `docker compose -f docker-compose.tailscale.yml logs tailscale`. Or create an auth key (**Settings → Keys → Generate auth
+  key**) and set `TS_AUTHKEY` in `.env` before the first start. The key is used once: the machine stays signed in, in the
+  `tailscale-state` volume, across restarts and updates.
+- **The address:** `https://fastmemo.<your-tailnet>.ts.net`. `TS_HOSTNAME` changes `fastmemo`. If the name is taken, Tailscale
+  adds a number (`fastmemo-1`): the **Machines** page shows the real one.
+- **What's served** is in `tailscale/serve.json`: port 443 forwards to the server at `127.0.0.1:8787`.
+
+### Tailscale Funnel
+
+Funnel makes the Tailscale address public: devices without Tailscale (the web app on a computer that isn't yours) can reach it.
+
+- `sudo tailscale funnel --bg 8787` serves the same `https://<machine>.<your-tailnet>.ts.net` to the whole internet. The first
+  time, it prints a link to allow Funnel in your tailnet: one click in the admin.
+- With `docker-compose.tailscale.yml`, set `AllowFunnel` to `true` in `tailscale/serve.json`. The container picks the change up
+  on its own. If Funnel was never allowed in your tailnet, allow it once in the admin: **Access controls → Add Funnel to
+  policy**.
+- Anyone can now reach the server, and only the access key keeps them out: use a long one (`openssl rand -hex 24`). After 20
+  wrong keys in 15 minutes, an address is refused for a while.
+- The certificate stays on your machine: Tailscale forwards the encrypted traffic and can't read it.
+- Funnel traffic has bandwidth limits, which Tailscale doesn't publish.
+- To make it private again: `sudo tailscale funnel reset`, then `sudo tailscale serve --bg 8787`. In a container, set
+  `AllowFunnel` back to `false`.
 
 ## Caddy
 
 - The domain's DNS record must point to the server, and ports 80 and 443 must be open (forwarded, on a home router).
 - Caddy keeps its certificates in the `caddy-data` volume and renews them on its own.
 - `docker-compose.caddy.yml` sets `TRUST_PROXY=true` and doesn't publish port 8787: only Caddy is reachable.
+
+## Cloudflare Tunnel
+
+A public HTTPS address on your domain, with nothing opened on the router: the `cloudflared` container connects out to
+Cloudflare, and Cloudflare sends the requests back through that connection. It works behind CGNAT and routers you can't
+configure.
+
+- The domain must use Cloudflare's nameservers. The free plan is enough.
+- In the Cloudflare dashboard: **Networking → Tunnels → Create a tunnel**, any name. Choose Docker: the command it shows ends
+  with `--token <a long text>`. That text goes in `.env` as `CLOUDFLARE_TUNNEL_TOKEN`. Then
+  `docker compose -f docker-compose.cloudflare.yml up -d`, and the dashboard shows the tunnel as connected.
+- In the tunnel: **Routes → Add route → Published application**. Subdomain `notes`, your domain, service URL
+  `http://fastmemo:8787` (the server's name inside Docker, not `localhost`). Cloudflare creates the DNS record.
+- The token lets anyone run your tunnel: keep `.env` private. To replace it, refresh the token in the tunnel's settings, update
+  `.env` and run `docker compose -f docker-compose.cloudflare.yml up -d`.
+- **Cloudflare can see the traffic.** It decrypts HTTPS on its servers before it forwards it: note titles, device names and
+  device tokens pass through it in the clear, the notes' content doesn't (it's end-to-end encrypted). If that's not fine for
+  you, use Tailscale (Funnel included) or Caddy, which keep the certificate on your machine.
+- Limits that matter here: a request can be up to 100 MB on the free plan (`MAX_BODY_MB` is 64), and must be answered within 100
+  seconds (a long poll waits 50 at most).
+- `docker-compose.cloudflare.yml` sets `TRUST_PROXY=true` and doesn't publish port 8787: only the tunnel reaches the server.
+- Quick tunnels (`trycloudflare.com`) get a new address at every start: the devices would lose the server.
 
 ## Coolify
 
@@ -160,6 +215,8 @@ Open the server's address in a browser and enter the admin key (`FASTMEMO_ADMIN_
 
 - Open the server's address in the phone's browser. You should see the dashboard's login page. If not, the phone can't reach the
   server: is Tailscale on? Is the address right? Is a firewall in the way?
+- With Cloudflare Tunnel, if the browser opens the dashboard but the app can't connect, a Cloudflare security setting may be
+  challenging the app (Bot Fight Mode, "I'm Under Attack" mode): an app can't solve a challenge. Turn it off for the domain.
 - The web app and the Windows desktop app need `https://`. The Android, macOS and Linux apps accept `http://` after a warning:
   type `http://` before a name (`http://nas.home.arpa:8787`); without it the app assumes `https://`, except for an IP address,
   `localhost` or a `.local` name.
