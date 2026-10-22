@@ -1,6 +1,6 @@
 # Tests the server, then publishes its image to GHCR for linux/amd64 and linux/arm64.
 #
-# A tag v1.2.3 publishes ghcr.io/ontech7/fastmemo-server:1.2.3, :1.2 and :latest (a pre-release such as v1.3.0-rc.1 gets
+# A tag v1.2.3 publishes ghcr.io/ontech7/fastmemo-server:1.2.3, :1.2, :1 and :latest (a pre-release such as v1.3.0-rc.1 gets
 # only its own tag). The tag must match the version in package.json. A manual run on a branch publishes a tag named after
 # the branch (e.g. :main), never :latest.
 name: Docker image
@@ -61,6 +61,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
             type=ref,event=branch
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
