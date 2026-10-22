@@ -125,7 +125,7 @@ address and the key.
 
 ## Connect the app
 
-Set up [HTTPS](#https) first: the web app only reaches `https://` addresses (so did the Windows desktop app before 2.0). To try
+The web app only reaches `https://` addresses; Android and the desktop apps accept `http://` too (see [HTTPS](#https)). To try
 it on the computer that runs the server, `http://localhost:8787` is enough. Then, on each device:
 
 1. Open **Settings → Cloud Sync** and turn on **Enable Cloud sync**.
@@ -138,23 +138,30 @@ notes.
 
 ## HTTPS
 
-Use HTTPS. The web app only connects to `https://` addresses (or to a server on the same computer); so did the Windows desktop
-app before 2.0. The Android app and the desktop apps (macOS, Linux, Windows) also accept `http://`, after a warning. Over plain
-HTTP, what a device sends isn't encrypted on any network it joins, not only at home: a phone set up on your Wi-Fi keeps talking
-to that address from a café's. Whoever can see that traffic can read the note titles and the device's credentials, and with them
-change or delete notes and remove devices; the notes' content stays end-to-end encrypted. The access key only travels when a
-device connects; after that each device uses its own token. If you think one was seen, change the access key and remove and
-re-add each device: a device's token keeps working after a key change.
+The web app only connects to `https://` addresses (or to a server on the same computer). The Android app and the desktop apps
+(macOS, Linux, Windows) accept `http://` too.
+
+Plain HTTP isn't encrypted, and that's fine through Tailscale or a VPN like WireGuard: the tunnel encrypts the traffic (the app
+doesn't even warn for a Tailscale address). Elsewhere, use HTTPS: a phone set up on your Wi-Fi keeps talking to that address
+from a café's, and whoever can see that traffic can read the note titles and the device's credentials, and with them change or
+delete notes and remove devices; the notes' content stays end-to-end encrypted. The access key only travels when a device
+connects; after that each device uses its own token. If you think one was seen, change the access key and remove and re-add each
+device: a device's token keeps working after a key change.
 
 ### Tailscale (easiest)
 
-[Tailscale](https://tailscale.com) gives the server an HTTPS address in a private network: no domain, nothing open to the
-internet.
+[Tailscale](https://tailscale.com) puts the server in a private, encrypted network that your devices reach from anywhere: no
+domain, nothing open to the internet.
 
 1. Install Tailscale on the server and on every device, and sign in with the same account.
 2. On the server, run `sudo tailscale serve --bg 8787`. It prints your address, like `https://raspberrypi.your-tailnet.ts.net`.
 3. Set `TRUST_PROXY=true` and `PORT=127.0.0.1:8787` in `.env`, and run `docker compose up -d`. The server is then reached
    through Tailscale only: nobody on your network can reach it directly and pose as another address.
+
+**Rather have no certificate?** An HTTPS address puts its name (`raspberrypi.your-tailnet.ts.net`) in the public Certificate
+Transparency logs: the server stays private, but the name can be seen. Plain HTTP through Tailscale is encrypted all the same,
+and enough for Android and the desktop apps (not the web app): in step 2 run
+`sudo tailscale serve --bg --tcp=8787 tcp://127.0.0.1:8787`, and the address is `http://raspberrypi.your-tailnet.ts.net:8787`.
 
 **Can't install Tailscale on the server** (a NAS, for example)? Run it in a container next to the server instead. Turn on
 **HTTPS Certificates** in the Tailscale admin (**DNS** page), then:
@@ -164,7 +171,9 @@ docker compose -f docker-compose.tailscale.yml up -d
 docker compose -f docker-compose.tailscale.yml logs tailscale
 ```
 
-Open the link after `To authenticate, visit:` and sign in. Your address is `https://fastmemo.your-tailnet.ts.net`.
+Open the link after `To authenticate, visit:` and sign in. Your address is `https://fastmemo.your-tailnet.ts.net`. For plain
+HTTP with no certificate, put `{"TCP": {"8787": {"TCPForward": "127.0.0.1:8787"}}}` in `tailscale/serve.json` (HTTPS
+Certificates can stay off): the address is `http://fastmemo.your-tailnet.ts.net:8787`.
 
 **A device without Tailscale** (the web app on a computer that isn't yours)? `sudo tailscale funnel --bg 8787` makes the same
 address public, on the internet. Anyone can then reach the server, so use a long access key. To make it private again:

@@ -27,12 +27,14 @@ Ask only what you can't find out yourself:
 1. **Where will the server run?** This computer, another computer in the house (a NAS, a Raspberry Pi, a home server), or a VPS.
    If it's another machine, you need a terminal on it (SSH); run every command below there.
 2. **Which devices will connect?** If one of them is the **web app**, the server needs HTTPS: it only connects to `https://`
-   addresses (so did the Windows desktop app before 2.0). (Android and the desktop apps also accept `http://`, after a warning.)
+   addresses (so did the Windows desktop app before 2.0). (Android and the desktop apps also accept `http://`.)
 3. **How should the devices reach it?** Recommend in this order:
-   - **Tailscale** (easiest): a private network with HTTPS, no domain, nothing open to the internet, and it works away from home
-     too. Every device installs the Tailscale app and signs in to the same account. On a NAS, or wherever Tailscale can't be
-     installed, it runs in a container instead. If one device can't run Tailscale (the web app on a computer that isn't theirs),
-     Funnel makes the address public: only when they ask for it.
+   - **Tailscale** (easiest): a private, encrypted network, no domain, nothing open to the internet, and it works away from home
+     too. HTTPS by default; if the web app isn't one of their devices, plain HTTP through Tailscale is just as encrypted and
+     keeps the server's name out of the public certificate logs: offer it. Every device installs the Tailscale app and signs in
+     to the same account. On a NAS, or wherever Tailscale can't be installed, it runs in a container instead. If one device
+     can't run Tailscale (the web app on a computer that isn't theirs), Funnel makes the address public: only when they ask for
+     it.
    - **Their own domain, with Caddy**: they have a domain, and can point it to the server and open ports 80 and 443.
    - **Their own domain, with Cloudflare Tunnel**: the domain is on Cloudflare, and they can't or won't open ports (CGNAT, a
      router they don't control). Tell them first that Cloudflare can see the traffic (titles and device credentials, not the
@@ -94,7 +96,9 @@ folder instead: that's expected. It takes a few minutes and prints a lot, npm wa
 2. `sudo tailscale up`. It prints a login link: **the person opens it** and signs in.
 3. `docker compose up -d`
 4. `sudo tailscale serve --bg <port>`. It prints the address, like `https://raspberrypi.tail1234.ts.net`. If it asks to enable
-   HTTPS certificates or MagicDNS, it prints a link: **the person opens it** and enables them, then run the command again.
+   HTTPS certificates or MagicDNS, it prints a link: **the person opens it** and enables them, then run the command again. For
+   plain HTTP: `sudo tailscale serve --bg --tcp=<port> tcp://127.0.0.1:<port>`, and the address is
+   `http://raspberrypi.tail1234.ts.net:<port>`.
 5. The person installs Tailscale on every device that will use FastMemo, signed in to the same account.
 6. Tell the person to turn off key expiry for the server (admin, **Machines**, the server's menu, **Disable key expiry**):
    otherwise Tailscale signs it out after 180 days.
@@ -106,7 +110,9 @@ folder instead: that's expected. It takes a few minutes and prints a lot, npm wa
 2. `docker compose -f docker-compose.tailscale.yml up -d`
 3. `docker compose -f docker-compose.tailscale.yml logs tailscale` shows a link after `To authenticate, visit:`. **The person
    opens it** and signs in. (Or, if they gave you an auth key, set `TS_AUTHKEY` in `.env` before step 2.)
-4. The address is `https://fastmemo.<their-tailnet>.ts.net`: the **Machines** page of the admin shows the full name, and
+4. The address is `https://fastmemo.<their-tailnet>.ts.net` (for plain HTTP, before step 2 replace `tailscale/serve.json` with
+   `{"TCP": {"8787": {"TCPForward": "127.0.0.1:8787"}}}` and skip HTTPS Certificates: the address is
+   `http://fastmemo.<their-tailnet>.ts.net:8787`): the **Machines** page of the admin shows the full name, and
    `docker compose -f docker-compose.tailscale.yml exec tailscale tailscale status` lists it.
 5. As above: Tailscale on every device, and key expiry off for the server.
 
@@ -193,9 +199,9 @@ Tell the person, in plain words:
 2. **The dashboard**: the same address in a browser. It opens with the access key (or with `FASTMEMO_ADMIN_KEY`, if you set
    one). It shows devices, space used and warnings, and makes backups.
 3. **In the app**, on each device: **Settings → Cloud Sync**, turn on **Enable Cloud sync**, choose **FastMemo Server** in
-   **Sync with**, enter the address and the access key, then **Save settings**. With `http://`, the app warns first: they
-   accept. The first device asks for an **encryption password** and shows a **recovery key**: they write the recovery key down.
-   Without the password or the recovery key, nobody can read the notes, not even them.
+   **Sync with**, enter the address and the access key, then **Save settings**. With `http://` (other than a Tailscale address),
+   the app asks to confirm: they accept. The first device asks for an **encryption password** and shows a **recovery key**: they
+   write the recovery key down. Without the password or the recovery key, nobody can read the notes, not even them.
 4. **The server runs while this machine is on** (and, on a Mac or PC, while Docker Desktop runs).
 5. **Backups**: the dashboard's **Download a backup** button, or the script in the [README](../README.md#backups-and-restore). A
    backup holds the titles and the device list: keep it private.
