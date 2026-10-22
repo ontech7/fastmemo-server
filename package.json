@@ -1,6 +1,6 @@
 {
   "name": "fastmemo-server",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Self-hosted sync server for FastMemo: end-to-end encrypted notes, live sync between devices, ops dashboard.",
   "license": "AGPL-3.0-only",
   "private": true,

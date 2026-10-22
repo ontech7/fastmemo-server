@@ -19,6 +19,8 @@ adds what you need on top: what to ask, what to check, what never to do, and how
 4. **Never paste the access key anywhere but the person's machine** (`.env`) and your final message to them. Don't put it in a
    commit, an issue, or a command that sends it to another service.
 5. **Never edit the source code** to make the setup work. If something fails, see [If something fails](#if-something-fails).
+6. **Never give the server's container the Docker socket**, and never install the updater without the person's yes: it is a
+   service that runs as root on the machine (see [step 7](#7-optional-one-click-updates)).
 
 ## 1. Ask
 
@@ -207,26 +209,83 @@ Tell the person, in plain words:
 4. **The server runs while this machine is on** (and, on a Mac or PC, while Docker Desktop runs).
 5. **Backups**: the dashboard's **Download a backup** button, or the script in the [README](../README.md#backups-and-restore). A
    backup holds the titles and the device list: keep it private.
-6. **Updating**, in the `fastmemo-server` folder: `git pull`, then `docker compose pull && docker compose up -d`. If
+6. **Updating**: the dashboard shows when a newer version is out (it asks GitHub every 6 hours; `UPDATE_CHECK=off` stops that).
+   By hand, in the `fastmemo-server` folder: `git pull`, then `docker compose pull && docker compose up -d`. If
    `docker compose pull` fails (`denied`, `not found`), build the new version from the folder instead, with
    `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build` (the same two files for every command after
-   it).
+   it). With the updater from [step 7](#7-optional-one-click-updates), the dashboard's **Install** button does it. A new major
+   version (2.0) is always by hand: read its notes first.
+
+## 7. Optional: one-click updates
+
+Offer it once, in plain words: "I can add a small service that lets the dashboard install new versions for you, with a backup
+and an automatic way back if something goes wrong. It runs as root on this machine. Do you want it?" Only on a yes, and only
+when all of these hold: Linux with systemd (`systemctl --version`) and Python 3 (`python3 --version`); the server is the SQLite
+one (`docker-compose.yml`, Caddy, Cloudflare or Tailscale, not PostgreSQL and not Coolify); you started it from a cloned folder
+with the published image (not `docker-compose.build.yml`). Else skip it: the person updates by hand.
+
+First set `FASTMEMO_ADMIN_KEY` in `.env` (another `openssl rand -hex 24`, tell the person it opens the dashboard): otherwise the
+access key, which every device holds, opens the dashboard and its **Install** button. Then, in the server's folder (the one with
+`.env`; `COMPOSE_FILE` is the compose file you use, relative to it, then the overlay, separated by `:`):
+
+```sh
+sudo install -m 0755 -D contrib/updater/fastmemo-updater.py /usr/local/lib/fastmemo/fastmemo-updater.py
+sudo install -m 0644 -D contrib/updater/updater.env.example /etc/fastmemo/updater.env
+sudo install -m 0644 contrib/updater/fastmemo-updater.path contrib/updater/fastmemo-updater.service /etc/systemd/system/
+sudo install -d -o 1000 -g 1000 -m 0750 /var/lib/fastmemo-update/request
+sudo install -d -m 0755 /var/lib/fastmemo-update/status
+sudo install -d -m 0700 /var/lib/fastmemo-update/backup /var/lib/fastmemo-update/docker /var/lib/fastmemo-update/gh
+sudo sed -i "s|^COMPOSE_DIR=.*|COMPOSE_DIR=$PWD|" /etc/fastmemo/updater.env
+sudo sed -i "s|^COMPOSE_FILE=.*|COMPOSE_FILE=docker-compose.yml:contrib/updater/compose.updater.yaml|" /etc/fastmemo/updater.env
+sudo mkdir -p /etc/systemd/system/fastmemo-updater.service.d
+printf '[Service]\nReadWritePaths=%s\n' "$PWD" | sudo tee /etc/systemd/system/fastmemo-updater.service.d/checkout.conf
+sudo systemctl daemon-reload
+sudo systemctl enable fastmemo-updater.service
+sudo systemctl enable --now fastmemo-updater.path
+docker compose -f docker-compose.yml -f contrib/updater/compose.updater.yaml up -d
+```
+
+- With another compose file (`docker-compose.caddy.yml`, ...), put it in place of `docker-compose.yml` in the last line and in
+  the `COMPOSE_FILE` line (the overlay stays last), and use the same pair of `-f` for every `docker compose` command after.
+- Docker keeps its data elsewhere than `/var/lib/docker` (`docker info --format '{{.DockerRootDir}}'` prints another folder, or
+  `/var/lib/docker` is a symlink, as with an SSD on a Raspberry Pi)? Add `ReadWritePaths=<that folder>/volumes` as a second line
+  of `checkout.conf`, then `sudo systemctl daemon-reload`.
+- Create the folders **before** the last line: otherwise Docker makes the request folder owned by root and **Install** fails.
+- Optional, for verified build provenance: a recent GitHub CLI (`gh --version`, 2.49 or newer) and a token with no scopes, which
+  **the person** creates (GitHub → Settings → Developer settings → Personal access tokens, no boxes ticked) and gives you:
+  `sudo install -m 0600 /dev/null /etc/fastmemo/updater.secret`, then put `GH_TOKEN=<the token>` in that file. Without them an
+  update says "Provenance not checked" in the dashboard; tell the person.
+
+Check it:
+
+```sh
+systemctl is-active fastmemo-updater.path         # active
+systemctl is-enabled fastmemo-updater.service     # enabled
+docker compose -f docker-compose.yml -f contrib/updater/compose.updater.yaml ps   # fastmemo: "Up ... (healthy)"
+curl -fsS -H "Authorization: Bearer <the admin key>" http://127.0.0.1:<port>/admin/api/updates   # ..."installable":true...
+```
+
+`"installable":true` means the server sees the two folders. Never click **Install** to test it: wait for a real release. If
+something is off, [DEPLOYMENT.md → The updater](DEPLOYMENT.md#the-updater) has the log (`sudo journalctl -u fastmemo-updater`),
+what each status means, and where the backups are. Tell the person, at hand-over: updates install from the dashboard; a backup
+of the database is kept in `/var/lib/fastmemo-update/backup`; a new major version is always by hand.
 
 ## If something fails
 
-| What you see                                                 | What to do                                                                                                                |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `Configuration error: ...` in `docker compose logs fastmemo` | Fix that value in `.env` (keys need 16+ characters), then `docker compose up -d`.                                         |
-| `port is already allocated`                                  | Another program uses the port: set another `PORT` in `.env`, then `docker compose up -d`.                                 |
-| `container name "/fastmemo-server" is already in use`        | FastMemo Server is already installed on this machine (see [step 2](#2-check-the-machine)): ask before going on.           |
-| `permission denied` on the Docker socket                     | The user isn't in the `docker` group yet: `sudo usermod -aG docker $USER`, then log out and back in.                      |
-| `/v1/health` works on the server but not from outside        | The HTTPS step: Tailscale not serving (`tailscale serve status`), DNS not pointing to the server, or ports 80/443 closed. |
-| `required variable CLOUDFLARE_TUNNEL_TOKEN is missing`       | Set the token in `.env`, then run the command again.                                                                      |
-| `Provided Tunnel token is not valid` (logs of `cloudflared`) | The token was copied wrong: copy it again from the tunnel in the Cloudflare dashboard, then `up -d` again.                |
-| Cloudflare: the page shows a 502 or "Bad gateway"            | The route's service URL is wrong: it must be `http://fastmemo:8787`.                                                      |
-| Tailscale container: the address doesn't answer              | Not signed in (the link in its logs), or HTTPS Certificates off on the admin's DNS page.                                  |
-| The app says the key is wrong                                | Compare it with `.env`. After 20 wrong tries in 15 minutes, the address is refused for a while: wait a few minutes.       |
-| The web app can't connect to `http://`                       | It needs HTTPS (so did the Windows app before 2.0): set up Tailscale or Caddy.                                            |
+| What you see                                                      | What to do                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Configuration error: ...` in `docker compose logs fastmemo`      | Fix that value in `.env` (keys need 16+ characters), then `docker compose up -d`.                                                                                                                                              |
+| `port is already allocated`                                       | Another program uses the port: set another `PORT` in `.env`, then `docker compose up -d`.                                                                                                                                      |
+| `container name "/fastmemo-server" is already in use`             | FastMemo Server is already installed on this machine (see [step 2](#2-check-the-machine)): ask before going on.                                                                                                                |
+| `permission denied` on the Docker socket                          | The user isn't in the `docker` group yet: `sudo usermod -aG docker $USER`, then log out and back in.                                                                                                                           |
+| `/v1/health` works on the server but not from outside             | The HTTPS step: Tailscale not serving (`tailscale serve status`), DNS not pointing to the server, or ports 80/443 closed.                                                                                                      |
+| `required variable CLOUDFLARE_TUNNEL_TOKEN is missing`            | Set the token in `.env`, then run the command again.                                                                                                                                                                           |
+| `Provided Tunnel token is not valid` (logs of `cloudflared`)      | The token was copied wrong: copy it again from the tunnel in the Cloudflare dashboard, then `up -d` again.                                                                                                                     |
+| Cloudflare: the page shows a 502 or "Bad gateway"                 | The route's service URL is wrong: it must be `http://fastmemo:8787`.                                                                                                                                                           |
+| Tailscale container: the address doesn't answer                   | Not signed in (the link in its logs), or HTTPS Certificates off on the admin's DNS page.                                                                                                                                       |
+| The dashboard has no **Install** button, or `"installable":false` | The folders `/var/lib/fastmemo-update/request` and `status` must exist before the server starts with the overlay, and the server must be started with `contrib/updater/compose.updater.yaml`: create them, then `up -d` again. |
+| The app says the key is wrong                                     | Compare it with `.env`. After 20 wrong tries in 15 minutes, the address is refused for a while: wait a few minutes.                                                                                                            |
+| The web app can't connect to `http://`                            | It needs HTTPS (so did the Windows app before 2.0): set up Tailscale or Caddy.                                                                                                                                                 |
 
 Anything else: [DEPLOYMENT.md → Troubleshooting](DEPLOYMENT.md#troubleshooting), then the logs
 (`docker compose logs --tail 100 fastmemo`). If it's still stuck, stop and tell the person what you saw; don't change the code.
