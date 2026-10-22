@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """fastmemo-server updater: installs a newer release when the dashboard asks for one.
 
-Runs as root on the host. The server only ever leaves a wish (a version number in a folder); everything here is decided
-again:
+Runs as root on the host, started by fastmemo-updater.path when the dashboard leaves a request (and once at boot, to
+undo a switch a power cut interrupted). The server only ever leaves a wish (a version number in a folder); everything
+here is decided again:
 
 - from the request only a version number is read (no symlinks, no special files, a few bytes at most);
 - the server must be the published image on SQLite, its data in a volume at /data, as the running container shows
@@ -11,12 +12,16 @@ again:
   configured repo;
 - the downloaded image must say it was built from that repository for that version, and its build provenance is
   verified against the exact digest that will run when the GitHub CLI and a token are available (always, with
-  VERIFY_PROVENANCE=required).
+  VERIFY_PROVENANCE=required);
+- the server is stopped and its database copied before the switch, and if the new version does not become healthy,
+  or the run is stopped half-way, the previous image line and database come back. A database the new version may have
+  migrated never runs on the previous image (that one would refuse it).
 
 The dashboard reads progress from a status file in a folder the server can't write to. Messages are fixed strings:
 nothing the server wrote is ever echoed back.
 """
 
+import datetime
 import fcntl
 import http.client
 import json
@@ -29,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import urllib.error
 import urllib.request
 
@@ -40,9 +46,20 @@ WORKFLOW = re.compile(r"[A-Za-z0-9_./-]+\.ya?ml", re.ASCII)
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
 CONTAINER_ID = re.compile(r"[0-9a-f]{12,64}", re.ASCII)
 POSTGRES = re.compile(r"postgres(ql)?://", re.ASCII | re.IGNORECASE)
+VOLUME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*", re.ASCII)
+# The .env line compose reads FASTMEMO_IMAGE from (dotenv also takes `export` and spaces around `=`).
+IMAGE_SETTING = re.compile(r"[ \t]*(?:export[ \t]+)?FASTMEMO_IMAGE[ \t]*=[^\r\n]*", re.ASCII)
+BACKUP_NAME = re.compile(r"[0-9]{8}-[0-9]{6}-[0-9]{6}-[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}", re.ASCII)
 MAX_REQUEST_BYTES = 1024
 MAX_RELEASE_BYTES = 1024 * 1024
+MAX_ENV_BYTES = 1024 * 1024
 DATA = "/data"
+FINAL_STATES = ("done", "failed", "rolled_back", "refused")
+DATABASE_FILES = ("fastmemo.db", "fastmemo.db-wal", "fastmemo.db-shm")
+KEEP_BACKUPS = 3
+SPARE_BYTES = 256 * 1024 * 1024
+STOP_TIMEOUT = 120
+UP_TIMEOUT = 300
 DEFAULTS = {
     "REPO": "ontech7/fastmemo-server",
     "IMAGE": "ghcr.io/ontech7/fastmemo-server",
@@ -59,6 +76,8 @@ DEFAULTS = {
     "SIGNER_WORKFLOW": ".github/workflows/release.yml",
 }
 SOURCE_BUILD = "this server runs an image built from source: update it with the commands in the dashboard"
+NOT_PLAIN = "the database in the volume is not a plain file: update it with the commands in the dashboard"
+CHECK_THE_LOG = "check the updater's log (journalctl -u fastmemo-updater)"
 
 
 class Refused(Exception):
@@ -100,17 +119,49 @@ def load_config(path):
     return config
 
 
-def write_file(path, text, mode):
-    """Replaces a file atomically: a reader sees the old content or the new one, never half of it."""
-    handle, temporary = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".fastmemo-")
+def log(message):
+    """For the journal (journalctl -u fastmemo-updater): what a fixed status message can't say."""
+    print(f"fastmemo-updater: {message}", file=sys.stderr, flush=True)
+
+
+def sync_folder(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def write_file(path, text, mode=None):
+    """Replaces a file atomically, and on the disk before it returns: after a power cut it is the old or the new one.
+
+    Without a mode it keeps the mode and owner of the file it replaces.
+    """
+    owner = None
+    if mode is None:
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            info = None
+        if info is not None and stat.S_ISREG(info.st_mode):
+            mode, owner = stat.S_IMODE(info.st_mode), (info.st_uid, info.st_gid)
+        else:
+            mode = 0o600
+    directory = os.path.dirname(path) or "."
+    handle, temporary = tempfile.mkstemp(dir=directory, prefix=".fastmemo-")
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as file:
             file.write(text)
+            file.flush()
+            os.fsync(file.fileno())
         os.chmod(temporary, mode)
+        if owner:
+            os.chown(temporary, *owner)
         os.replace(temporary, path)
     except BaseException:
         remove(temporary)
         raise
+    sync_folder(directory)
 
 
 class Status:
@@ -121,6 +172,11 @@ class Status:
         self.version = "0.0.0"
         # Whether the image's provenance was verified: None until it was looked at.
         self.verified = None
+        self.state = None
+
+    @property
+    def final(self):
+        return self.state in FINAL_STATES
 
     def write(self, state, message=None):
         record = {
@@ -131,6 +187,63 @@ class Status:
             "verified": self.verified,
         }
         write_file(self.path, json.dumps(record), 0o644)
+        self.state = state
+
+
+class Switch:
+    """switch.json, there while the server is stopped or on the new image: what to undo if the run is cut short.
+
+    The next run (at boot, after a power cut) finds it and puts the previous image line and database back.
+    """
+
+    def __init__(self, config):
+        self.directory = os.path.normpath(config["BACKUP_DIR"])
+        self.path = os.path.join(self.directory, "switch.json")
+
+    def save(self, record):
+        write_file(self.path, json.dumps(record), 0o600)
+
+    def load(self):
+        try:
+            with open(self.path, encoding="utf-8") as file:
+                record = json.load(file)
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError, RecursionError):
+            record = None
+        if not self.valid(record):
+            # Root restores what it names: a record it can't trust is dropped, never followed.
+            log("switch.json was not valid and was removed: nothing was undone")
+            self.clear()
+            return None
+        return record
+
+    def valid(self, record):
+        if not isinstance(record, dict):
+            return False
+        version, current, line, image, folder, data = (
+            record.get(key) for key in ("version", "current", "line", "image", "folder", "data")
+        )
+        return (
+            all(isinstance(v, str) and VERSION.fullmatch(v) for v in (version, current))
+            and (line is None or (isinstance(line, str) and IMAGE_SETTING.fullmatch(line)))
+            and isinstance(image, str)
+            and IMAGE_SETTING.fullmatch(image)
+            and (
+                folder is None
+                or (
+                    isinstance(folder, str)
+                    and os.path.dirname(folder) == self.directory
+                    and BACKUP_NAME.fullmatch(os.path.basename(folder))
+                )
+            )
+            and isinstance(data, str)
+            and os.path.isabs(data)
+            and (record.get("verified") is None or isinstance(record.get("verified"), bool))
+        )
+
+    def clear(self):
+        remove(self.path)
 
 
 def remove(path):
@@ -266,6 +379,22 @@ def repository(reference):
     return name
 
 
+def data_volume(container):
+    """The name of the volume mounted at /data, or None."""
+    for mount in container["mounts"]:
+        name, source = mount.get("Name"), mount.get("Source")
+        if (
+            mount.get("Type") == "volume"
+            and mount.get("Destination") == DATA
+            and isinstance(name, str)
+            and VOLUME.fullmatch(name)
+            and isinstance(source, str)
+            and os.path.isabs(source)
+        ):
+            return name
+    return None
+
+
 def refuse(config, container):
     """Refuses a setup one click must not touch, and returns the running version.
 
@@ -279,15 +408,7 @@ def refuse(config, container):
         raise Refused("this server sets its own DATABASE_URL: update it with the commands in the dashboard")
     if container["env"].get("DATA_DIR") != DATA:
         raise Refused("the database is not in the volume at /data: update it with the commands in the dashboard")
-    if not any(
-        m.get("Type") == "volume"
-        and m.get("Destination") == DATA
-        and isinstance(m.get("Name"), str)
-        and m["Name"]
-        and isinstance(m.get("Source"), str)
-        and os.path.isabs(m["Source"])
-        for m in container["mounts"]
-    ):
+    if data_volume(container) is None:
         raise Refused("the database is not in a volume mounted at /data: update it with the commands in the dashboard")
 
     # Today's users run :1 or :latest: any tag of the published image is the published image.
@@ -355,7 +476,7 @@ def verify_provenance(config, version, pinned):
                 "--source-ref", f"refs/tags/v{version}",
                 "--deny-self-hosted-runners",
             ],
-            capture_output=True, text=True, timeout=120, check=False,
+            capture_output=True, text=True, errors="replace", timeout=120, check=False,
         )  # fmt: skip
     except (OSError, subprocess.TimeoutExpired):
         raise Failed("the build provenance of the image could not be verified")
@@ -364,19 +485,317 @@ def verify_provenance(config, version, pinned):
     return True
 
 
-def switch_to(config, status, current, reference):
-    """Stops the server, backs up its database, runs `reference` and rolls back if it doesn't become healthy."""
-    status.write("failed", "switching is not implemented yet")
+def read_env(path):
+    """The checkout's .env: a plain file (root rewrites it), small, text."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as file:
+            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+                raise OSError("not a regular file")
+            raw = file.read(MAX_ENV_BYTES + 1)
+        if len(raw) > MAX_ENV_BYTES:
+            raise OSError("too big")
+        return raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        raise Failed("the .env file could not be read, nothing was changed")
 
 
-def update(config, status):
+def image_line(env_text):
+    """The FASTMEMO_IMAGE line compose uses (the last one), or None when there is none."""
+    lines = [line.rstrip("\r") for line in env_text.split("\n") if IMAGE_SETTING.fullmatch(line.rstrip("\r"))]
+    return lines[-1] if lines else None
+
+
+def with_image(env_text, line):
+    """The .env with `line` as its only FASTMEMO_IMAGE line (none when None): every other line stays as it is."""
+    lines, placed = [], False
+    for each in env_text.split("\n"):
+        if IMAGE_SETTING.fullmatch(each.rstrip("\r")):
+            if line is not None and not placed:
+                lines.append(line + ("\r" if each.endswith("\r") else ""))
+                placed = True
+            continue
+        lines.append(each)
+    if line is not None and not placed:
+        if lines[-1] == "":
+            lines.insert(len(lines) - 1, line)
+        else:
+            lines += [line, ""]
+    return "\n".join(lines)
+
+
+def data_folder(config, volume):
+    """Where the /data volume is on the host (root can read it there)."""
+    found = run(config, "volume", "inspect", "--format", "{{.Mountpoint}}", volume, timeout=60).stdout.strip()
+    try:
+        plain_folder = os.path.isabs(found) and stat.S_ISDIR(os.lstat(found).st_mode)
+    except (OSError, ValueError):
+        plain_folder = False
+    if not plain_folder:
+        raise Failed("the database volume was not found, nothing was changed")
+    return found
+
+
+def database_files(data):
+    """The database files there are, with their size. Anything but plain files there is not ours to copy."""
+    found = {}
+    for name in DATABASE_FILES:
+        try:
+            info = os.lstat(os.path.join(data, name))
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            raise Refused(NOT_PLAIN)
+        found[name] = info.st_size
+    if DATABASE_FILES[0] not in found:
+        raise Failed("the database was not found, nothing was changed")
+    return found
+
+
+def check_space(config, files):
+    if shutil.disk_usage(config["BACKUP_DIR"]).free < sum(files.values()) + SPARE_BYTES:
+        raise Failed("there is not enough free space to back up the database, nothing was changed")
+
+
+def copy_plain(source, target):
+    """Copies a regular file without following symlinks at either end, onto the disk before it returns."""
+    fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as reader:
+        info = os.fstat(reader.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(f"{source} is not a regular file")
+        out = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(out, "wb") as writer:
+            shutil.copyfileobj(reader, writer, 1024 * 1024)
+            os.fchmod(writer.fileno(), stat.S_IMODE(info.st_mode))
+            writer.flush()
+            os.fsync(writer.fileno())
+
+
+def back_up(config, data, current, line):
+    """Copies the stopped server's database, with the image line it ran, to BACKUP_DIR/<time>-<version>/."""
+    files = database_files(data)
+    check_space(config, files)
+    # UTC to the microsecond: sorts by age, and two runs never pick the same name.
+    name = f"{datetime.datetime.now(datetime.timezone.utc):%Y%m%d-%H%M%S-%f}-{current}"
+    folder = os.path.join(config["BACKUP_DIR"], name)
+    os.makedirs(folder, mode=0o700)
+    try:
+        for each in files:
+            copy_plain(os.path.join(data, each), os.path.join(folder, each))
+        write_file(os.path.join(folder, "image.env"), f"{line}\n" if line is not None else "", 0o600)
+        sync_folder(folder)
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    prune(config, name)
+    return folder
+
+
+def prune(config, new):
+    """Keeps the last KEEP_BACKUPS copies. The new one always stays, even when a clock that ran ahead gave an older
+    one a later name (a Raspberry Pi has no clock of its own until it reaches a time server)."""
+    try:
+        older = sorted(
+            name
+            for name in os.listdir(config["BACKUP_DIR"])
+            if name != new
+            and BACKUP_NAME.fullmatch(name)
+            and stat.S_ISDIR(os.lstat(os.path.join(config["BACKUP_DIR"], name)).st_mode)
+        )
+    except OSError as error:
+        log(f"old copies were not removed: {error}")
+        return
+    for name in older[: max(len(older) - (KEEP_BACKUPS - 1), 0)]:
+        shutil.rmtree(os.path.join(config["BACKUP_DIR"], name), ignore_errors=True)
+
+
+def restore(data, folder):
+    """Puts the copied database back, owned like the volume's folder, whatever is in its place now.
+
+    The copy is checked first: a database file missing from it never removes the one in the volume.
+    """
+    saved = {}
+    for name in DATABASE_FILES:
+        try:
+            info = os.lstat(os.path.join(folder, name))
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(f"{name} in {folder} is not a regular file")
+        saved[name] = info
+    if DATABASE_FILES[0] not in saved:
+        raise OSError(f"{folder} has no {DATABASE_FILES[0]}")
+    owner = os.stat(data)
+    for name in DATABASE_FILES:
+        target = os.path.join(data, name)
+        try:
+            if stat.S_ISDIR(os.lstat(target).st_mode):
+                shutil.rmtree(target)
+            elif name not in saved:
+                os.unlink(target)
+        except FileNotFoundError:
+            pass
+        if name not in saved:
+            continue
+        handle, temporary = tempfile.mkstemp(dir=data, prefix=".restore-")
+        try:
+            source = os.open(os.path.join(folder, name), os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(handle, "wb") as writer, os.fdopen(source, "rb") as reader:
+                shutil.copyfileobj(reader, writer, 1024 * 1024)
+                writer.flush()
+                os.fsync(writer.fileno())
+            os.chmod(temporary, stat.S_IMODE(saved[name].st_mode))
+            os.chown(temporary, owner.st_uid, owner.st_gid)
+            os.replace(temporary, target)
+        except BaseException:
+            remove(temporary)
+            raise
+    sync_folder(data)
+
+
+def start(config):
+    """Starts the server with the image the .env names now (never a build: one click runs published images only)."""
+    return compose(config, "up", "-d", "--no-build", config["SERVICE"], check=False, timeout=UP_TIMEOUT).returncode == 0
+
+
+def healthy(config):
+    """Waits up to HEALTH_TIMEOUT seconds for the image's HEALTHCHECK (on /v1/health) to pass."""
+    deadline = time.monotonic() + int(config["HEALTH_TIMEOUT"])
+    while True:
+        try:
+            ids = compose(config, "ps", "-q", config["SERVICE"], check=False, timeout=60).stdout.split()
+            if len(ids) == 1 and CONTAINER_ID.fullmatch(ids[0]):
+                health = ["container", "inspect", "--format", "{{.State.Health.Status}}", ids[0]]
+                found = run(config, *health, check=False, timeout=60)
+                if found.returncode == 0 and found.stdout.strip() == "healthy":
+                    return True
+        except Failed:
+            pass
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return False
+        time.sleep(min(3, left))
+
+
+def attempt(what, action):
+    """One rollback step: True when it worked. A failure is logged and the rollback goes on."""
+    try:
+        if action() is False:
+            raise Failed("it did not succeed")
+        return True
+    except Exception as error:
+        log(f"rollback: {what} failed: {error}")
+        return False
+
+
+def roll_back(config, status, switch, record, reason):
+    """Brings back the previous image and its database. Every step is tried even when an earlier one failed."""
+    # A stop request waits until this is over: stopped half-way, neither version would run.
+    deferred = []
+    previous = signal.signal(signal.SIGTERM, lambda signum, _: deferred.append(signum))
+    try:
+        service = config["SERVICE"]
+        stopped = attempt("stopping the server", lambda: compose(config, "stop", service, timeout=STOP_TIMEOUT))
+        database_back = record["folder"] is None or attempt(
+            "putting the database back", lambda: restore(record["data"], record["folder"])
+        )
+        # A database the new version may have migrated stays with it: the previous version would refuse to open it.
+        line = record["line"] if database_back else record["image"]
+        env_back = attempt(
+            "putting the image line back",
+            lambda: write_file(config["ENV_FILE"], with_image(read_env(config["ENV_FILE"]), line)),
+        )
+        started = attempt("starting the server", lambda: start(config))
+        # From here the server may take new notes: a later run must not put the copy back over them.
+        switch.clear()
+        if not database_back:
+            status.write(
+                "failed", f"the database could not be put back, so the new version was started again: {CHECK_THE_LOG}"
+            )
+        elif not (stopped and env_back and started):
+            status.write("failed", f"the update could not be undone completely: {CHECK_THE_LOG}")
+        elif not healthy(config):
+            status.write(
+                "rolled_back",
+                f"{reason}; the previous version was started again but is not healthy yet: check the containers",
+            )
+        else:
+            status.write("rolled_back", f"{reason}; the previous version is running again")
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    if deferred and callable(previous):
+        previous(deferred[0], None)
+
+
+def switch_to(config, status, switch, current, reference, volume):
+    """Stops the server, copies its database, runs `reference` and rolls back if it doesn't become healthy."""
+    status.write("backing_up")
+    env_text = read_env(config["ENV_FILE"])
+    line = image_line(env_text)
+    data = data_folder(config, volume)
+    # Checked before anything stops; again once it has (the files may have grown).
+    check_space(config, database_files(data))
+
+    record = {
+        "version": status.version,
+        "current": current,
+        "line": line,
+        "image": f"FASTMEMO_IMAGE={reference}",
+        "folder": None,
+        "data": data,
+        "verified": status.verified,
+    }
+    switch.save(record)
+    try:
+        compose(config, "stop", config["SERVICE"], timeout=STOP_TIMEOUT)
+        record["folder"] = back_up(config, data, current, line)
+    except BaseException as error:
+        # Nothing changed yet: the running version just starts again.
+        started = attempt("starting the server again", lambda: start(config))
+        switch.clear()
+        if not started:
+            raise Failed(f"the database could not be copied and the server could not be started again: {CHECK_THE_LOG}")
+        if isinstance(error, (Refused, Failed)):
+            raise
+        if isinstance(error, OSError):
+            log(f"the copy failed: {error}")
+            raise Failed("the database could not be backed up, nothing was changed")
+        raise
+
+    try:
+        switch.save(record)
+        status.write("restarting")
+        write_file(config["ENV_FILE"], with_image(env_text, record["image"]))
+        if start(config):
+            if healthy(config):
+                # The marker goes first: a power cut now must not undo a version that works.
+                switch.clear()
+                status.write("done")
+                return
+            reason = "the new version did not become healthy"
+        else:
+            reason = "the new version could not be started"
+    except (Failed, OSError) as error:
+        log(f"the switch failed: {error}")
+        reason = "the new version could not be started"
+    except BaseException:
+        # Including the SystemExit a stop signal raises: the previous version comes back before leaving.
+        if not isinstance(sys.exc_info()[1], SystemExit):
+            traceback.print_exc()
+        reason = "the update was interrupted"
+    roll_back(config, status, switch, record, reason)
+
+
+def update(config, status, switch):
     version = take_request(config["REQUEST_DIR"])
     if version is None:
         return
     status.version = version
     status.write("checking")
 
-    current = refuse(config, running_container(config))
+    container = running_container(config)
+    current = refuse(config, container)
     if as_tuple(version) <= as_tuple(current):
         raise Refused("this version is not newer than the running one")
     if as_tuple(version)[0] != as_tuple(current)[0]:
@@ -392,7 +811,17 @@ def update(config, status):
 
     status.write("downloading")
     reference = verify_image(config, status, version)
-    switch_to(config, status, current, reference)
+    switch_to(config, status, switch, current, reference, data_volume(container))
+
+
+def recover(config, status, switch):
+    """Undoes a switch a previous run couldn't finish (a power cut, a kill), before anything else."""
+    record = switch.load()
+    if record is None:
+        return
+    status.version = record["version"]
+    status.verified = record["verified"]
+    roll_back(config, status, switch, record, "the update was interrupted")
 
 
 def cool_down(config):
@@ -409,7 +838,7 @@ def cool_down(config):
 
 
 def stop_on_signal(signum, _):
-    # Once is enough: a second signal must not cut what the first one started short.
+    # Once is enough: a second signal must not cut the rollback short.
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     raise SystemExit(f"stopped by signal {signum}")
 
@@ -418,21 +847,25 @@ def main():
     config = load_config(os.environ.get("FASTMEMO_UPDATER_CONFIG", "/etc/fastmemo/updater.env"))
     signal.signal(signal.SIGTERM, stop_on_signal)
     status = Status(config["STATUS_DIR"])
+    switch = Switch(config)
     os.makedirs(config["BACKUP_DIR"], mode=0o700, exist_ok=True)
     # One run at a time: the path unit and the boot run can start together.
     with open(os.path.join(config["BACKUP_DIR"], ".lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        recover(config, status, switch)
         if not os.path.lexists(os.path.join(config["REQUEST_DIR"], "request.json")):
             return
         cool_down(config)
         try:
-            update(config, status)
+            update(config, status, switch)
         except Refused as refusal:
             status.write("refused", str(refusal))
         except Failed as failure:
             status.write("failed", str(failure))
         except BaseException:
-            status.write("failed", "the update stopped unexpectedly: check the updater's log")
+            # A rollback that was asked to stop half-way finishes first and has written its own final status.
+            if not status.final:
+                status.write("failed", f"the update stopped unexpectedly: {CHECK_THE_LOG}")
             raise
 
 

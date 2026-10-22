@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile, spawnSync } from "node:child_process";
+import { type ChildProcess, execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import net, { type AddressInfo } from "node:net";
@@ -18,6 +18,8 @@ const IMAGE = "ghcr.io/ontech7/fastmemo-server";
 const DIGEST = "a".repeat(64);
 const RUNNING_ID = `sha256:${"b".repeat(64)}`;
 const CONTAINER = "0123456789ab".repeat(5) + "cdef";
+const ENV = "FASTMEMO_ACCESS_KEY=0123456789abcdef\nFASTMEMO_IMAGE=\nTZ=Europe/Rome\n";
+const PINNED = `FASTMEMO_IMAGE=${IMAGE}:1.2.0@sha256:${DIGEST}`;
 
 /** Stands in for the docker CLI: logs every call (with the status at that moment) and answers from state.json. */
 const DOCKER_STUB = `#!/usr/bin/env python3
@@ -29,11 +31,39 @@ try:
     status = json.load(open(state["statusFile"]))
 except (OSError, ValueError):
     status = None
+def image_line():
+    lines = [line for line in open(state["envFile"]).read().split("\\n") if line.startswith("FASTMEMO_IMAGE=")]
+    return lines[-1] if lines else None
+line = image_line()
+# Which version the checkout's .env runs: the one the updater pinned by digest, or the previous one.
+running = "new" if line and line.endswith("@sha256:${DIGEST}") else "old"
 with open(os.path.join(state_dir, "calls.log"), "a") as log:
-    log.write(json.dumps({"args": args, "status": status}) + "\\n")
+    log.write(json.dumps({"args": args, "status": status, "image": line}) + "\\n")
 source = "https://github.com/ontech7/fastmemo-server"
+data = state["volume"]
 if args[0] == "compose" and "ps" in args:
     print(state.get("container", "${CONTAINER}"))
+    sys.exit(0)
+if args[0] == "compose" and "stop" in args:
+    sys.exit(1 if running in state.get("stopFails", []) else 0)
+if args[0] == "compose" and "up" in args:
+    if running in state.get("upFails", []):
+        sys.exit(1)
+    if running == "new" and state.get("migrate"):
+        # The new version migrates the database as it starts.
+        open(os.path.join(data, "fastmemo.db"), "w").write("migrated by 1.2.0")
+        open(os.path.join(data, "fastmemo.db-wal"), "w").write("wal at 1.2.0")
+        open(os.path.join(data, "fastmemo.db-shm"), "w").write("shm at 1.2.0")
+    if running == "new" and state.get("loseBackup"):
+        for name in os.listdir(state["backupDir"]):
+            if name[0].isdigit():
+                os.unlink(os.path.join(state["backupDir"], name, "fastmemo.db"))
+    sys.exit(0)
+if args[:2] == ["volume", "inspect"]:
+    print(data)
+    sys.exit(0)
+if args[:2] == ["container", "inspect"] and "{{.State.Health.Status}}" in args:
+    print(state.get("health", {}).get(running, "healthy"))
     sys.exit(0)
 if args[:2] == ["container", "inspect"]:
     print(json.dumps([{
@@ -76,6 +106,8 @@ exit "\${GH_EXIT:-0}"
 interface Call {
   args: string[];
   status: { state: string; verified: boolean | null; message: string | null } | null;
+  /** The .env's FASTMEMO_IMAGE line when docker was called. */
+  image: string | null;
 }
 
 describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
@@ -101,7 +133,7 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
   after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
   let root: string;
-  let dirs: Record<"checkout" | "request" | "status" | "backup" | "etc" | "stub" | "bin", string>;
+  let dirs: Record<"checkout" | "request" | "status" | "backup" | "data" | "etc" | "stub" | "bin", string>;
 
   beforeEach(() => {
     releases.clear();
@@ -114,13 +146,17 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
       request: path.join(root, "request"),
       status: path.join(root, "status"),
       backup: path.join(root, "backup"),
+      data: path.join(root, "data"),
       etc: path.join(root, "etc"),
       stub: path.join(root, "stub"),
       bin: path.join(root, "bin"),
     };
     for (const dir of Object.values(dirs)) fs.mkdirSync(dir);
     fs.mkdirSync(path.join(dirs.checkout, "contrib", "updater"), { recursive: true });
-    fs.writeFileSync(path.join(dirs.checkout, ".env"), "FASTMEMO_ACCESS_KEY=0123456789abcdef\nFASTMEMO_IMAGE=\n");
+    fs.writeFileSync(path.join(dirs.checkout, ".env"), ENV);
+    // The data volume, as `docker volume inspect` shows it: the database with its WAL, no -shm.
+    fs.writeFileSync(path.join(dirs.data, "fastmemo.db"), "notes at 1.1.0");
+    fs.writeFileSync(path.join(dirs.data, "fastmemo.db-wal"), "wal at 1.1.0");
     fs.writeFileSync(path.join(dirs.checkout, "docker-compose.yml"), "services: {}\n");
     fs.writeFileSync(path.join(dirs.checkout, "contrib", "updater", "compose.updater.yaml"), "services: {}\n");
     fs.symlinkSync(PYTHON, path.join(dirs.bin, "python3"));
@@ -155,7 +191,13 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
   const setState = (state: Record<string, unknown>) =>
     fs.writeFileSync(
       path.join(dirs.stub, "state.json"),
-      JSON.stringify({ statusFile: path.join(dirs.status, "status.json"), ...state })
+      JSON.stringify({
+        statusFile: path.join(dirs.status, "status.json"),
+        envFile: path.join(dirs.checkout, ".env"),
+        volume: dirs.data,
+        backupDir: dirs.backup,
+        ...state,
+      })
     );
 
   const request = (body: unknown) =>
@@ -164,9 +206,10 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
   const withGh = () => fs.writeFileSync(path.join(dirs.bin, "gh"), GH_STUB, { mode: 0o755 });
 
   /** Async on purpose: the fake GitHub API lives in this process and must keep answering while Python runs. */
-  const runUpdater = (env: Record<string, string> = {}) =>
-    new Promise<{ code: number; stderr: string }>((resolve) => {
-      execFile(
+  const startUpdater = (env: Record<string, string> = {}) => {
+    let child: ChildProcess | undefined;
+    const done = new Promise<{ code: number; stderr: string }>((resolve) => {
+      child = execFile(
         PYTHON,
         ["-I", UPDATER],
         {
@@ -182,6 +225,9 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
         (error, _stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stderr })
       );
     });
+    return { done, child: child as ChildProcess };
+  };
+  const runUpdater = (env: Record<string, string> = {}) => startUpdater(env).done;
 
   const statusFile = () => path.join(dirs.status, "status.json");
   const status = () => JSON.parse(fs.readFileSync(statusFile(), "utf8"));
@@ -198,6 +244,41 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
   const pulled = () => calls().some((call) => call.args[0] === "pull");
   const stopped = () => calls().some((call) => call.args[0] === "compose" && call.args.includes("stop"));
   const resetCalls = () => fs.rmSync(path.join(dirs.stub, "calls.log"), { force: true });
+  const env = () => fs.readFileSync(path.join(dirs.checkout, ".env"), "utf8");
+  const read = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
+  const backups = () =>
+    fs
+      .readdirSync(dirs.backup)
+      .filter((name) => /^\d/.test(name))
+      .sort();
+  const marker = () => path.join(dirs.backup, "switch.json");
+  const composeArgs = () => [
+    "compose",
+    "--project-directory",
+    dirs.checkout,
+    "-f",
+    path.join(dirs.checkout, "docker-compose.yml"),
+    "-f",
+    path.join(dirs.checkout, "contrib/updater/compose.updater.yaml"),
+    "--env-file",
+    path.join(dirs.checkout, ".env"),
+  ];
+  const isHealth = (call: Call) => call.args.includes("{{.State.Health.Status}}");
+  const ups = () => calls().filter((call) => call.args[0] === "compose" && call.args.includes("up"));
+  /** The database is back as it was before the switch: same bytes, no -shm the new version left, owned like /data. */
+  const assertDatabaseBack = () => {
+    assert.equal(read(dirs.data, "fastmemo.db"), "notes at 1.1.0");
+    assert.equal(read(dirs.data, "fastmemo.db-wal"), "wal at 1.1.0");
+    assert.equal(fs.existsSync(path.join(dirs.data, "fastmemo.db-shm")), false);
+    const owner = fs.statSync(dirs.data);
+    for (const name of ["fastmemo.db", "fastmemo.db-wal"]) {
+      const info = fs.statSync(path.join(dirs.data, name));
+      assert.deepEqual([info.uid, info.gid], [owner.uid, owner.gid]);
+    }
+  };
+  const until = async (condition: () => boolean) => {
+    for (let i = 0; i < 400 && !condition(); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+  };
 
   test("does nothing without a request", async () => {
     assert.equal((await runUpdater()).code, 0);
@@ -229,33 +310,18 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
   test("checks a newer release of the same major, then verifies the image it would switch to", async () => {
     request({ version: "1.2.0" });
     assert.equal((await runUpdater()).code, 0);
-    assert.deepEqual(
-      { ...status(), at: 0 },
-      { state: "failed", version: "1.2.0", message: "switching is not implemented yet", at: 0, verified: false }
-    );
+    assert.deepEqual({ ...status(), at: 0 }, { state: "done", version: "1.2.0", message: null, at: 0, verified: false });
     assert.ok(Math.abs(status().at - Date.now()) < 60_000);
     assert.equal(requestLeft(), false);
     assert.equal(fs.statSync(statusFile()).mode & 0o777, 0o644);
 
-    const compose = [
-      "compose",
-      "--project-directory",
-      dirs.checkout,
-      "-f",
-      path.join(dirs.checkout, "docker-compose.yml"),
-      "-f",
-      path.join(dirs.checkout, "contrib/updater/compose.updater.yaml"),
-      "--env-file",
-      path.join(dirs.checkout, ".env"),
-    ];
     const args = calls().map((call) => call.args);
-    assert.deepEqual(args[0], [...compose, "ps", "-q", "fastmemo"]);
+    assert.deepEqual(args[0], [...composeArgs(), "ps", "-q", "fastmemo"]);
     assert.deepEqual(args[1], ["container", "inspect", CONTAINER]);
     assert.deepEqual(
       args.find((a) => a[0] === "pull"),
       ["pull", "--quiet", `${IMAGE}:1.2.0`]
     );
-    assert.equal(stopped(), false);
   });
 
   test("resolves the checkout's own .env and compose files, absolute or relative", async () => {
@@ -391,7 +457,7 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
       setState({ image });
       request({ version: "1.2.0" });
       await runUpdater();
-      assert.equal(status().message, "switching is not implemented yet", image);
+      assert.deepEqual([status().state, status().message], ["done", null], image);
     }
   });
 
@@ -563,8 +629,13 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     // Until the check, nothing is known about the provenance; the status of the pull says so.
     const atPull = calls().find((call) => call.args[0] === "pull")?.status;
     assert.deepEqual([atPull?.state, atPull?.verified], ["downloading", null]);
-    for (const seenStatus of seen) assert.equal(seenStatus?.verified ?? null, null);
-    assert.equal(status().message, "switching is not implemented yet");
+    // After it (from the copy on), the status says it wasn't verified.
+    for (const seenStatus of seen) {
+      const after = ["backing_up", "restarting"].includes(seenStatus?.state ?? "");
+      assert.equal(seenStatus?.verified ?? null, after ? false : null, seenStatus?.state);
+    }
+    assert.ok(seen.some((seenStatus) => seenStatus?.state === "restarting"));
+    assert.deepEqual([status().state, status().message], ["done", null]);
     assert.equal(status().verified, false);
 
     // A gh with no token is the same: not verified.
@@ -592,7 +663,7 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
       "refs/tags/v1.2.0",
       "--deny-self-hosted-runners",
     ]);
-    assert.equal(status().message, "switching is not implemented yet");
+    assert.deepEqual([status().state, status().message], ["done", null]);
     assert.equal(status().verified, true);
   });
 
@@ -621,7 +692,7 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
       await runUpdater();
       const text = fs.readFileSync(statusFile(), "utf8");
       assert.equal(text.includes("MARKER"), false);
-      messages.push(status().message, ...calls().map((call) => call.status?.message ?? ""));
+      messages.push(status().message ?? "", ...calls().map((call) => call.status?.message ?? ""));
     }
     for (const message of messages) {
       for (const version of ["1.2.0", "2.0.0", "1.1.3", "1.6.0"]) assert.equal(message.includes(version), false, message);
@@ -636,5 +707,311 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     const started = Date.now();
     await runUpdater();
     assert.ok(Date.now() - started > 1500);
+  });
+
+  test("stops the server, copies its database, pins the new image in .env and waits for it to be healthy", async () => {
+    fs.chmodSync(path.join(dirs.checkout, ".env"), 0o600);
+    request({ version: "1.2.0" });
+    const result = await runUpdater();
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    assert.deepEqual({ ...status(), at: 0 }, { state: "done", version: "1.2.0", message: null, at: 0, verified: false });
+
+    // In order: the image is checked, then the server stops, then the new image starts and is waited for.
+    const all = calls();
+    const at = (match: (call: Call) => boolean) => all.findIndex(match);
+    const pull = at((call) => call.args[0] === "pull");
+    const stop = at((call) => call.args.join(" ") === [...composeArgs(), "stop", "fastmemo"].join(" "));
+    const up = at((call) => call.args.join(" ") === [...composeArgs(), "up", "-d", "--no-build", "fastmemo"].join(" "));
+    const health = at(isHealth);
+    assert.ok(pull >= 0 && pull < stop && stop < up && up < health, JSON.stringify(all.map((call) => call.args)));
+    assert.equal(all[stop]?.status?.state, "backing_up");
+    assert.deepEqual([all[stop]?.image, all[up]?.image], ["FASTMEMO_IMAGE=", PINNED]);
+    assert.equal(all[up]?.status?.state, "restarting");
+    assert.deepEqual(all[health]?.args, ["container", "inspect", "--format", "{{.State.Health.Status}}", CONTAINER]);
+    assert.ok(
+      all.some((call) => call.args.join(" ") === `volume inspect --format {{.Mountpoint}} fastmemo-server_fastmemo-data`)
+    );
+
+    // Only the image line changed, in place; the file keeps its mode.
+    assert.equal(env(), `FASTMEMO_ACCESS_KEY=0123456789abcdef\n${PINNED}\nTZ=Europe/Rome\n`);
+    assert.equal(fs.statSync(path.join(dirs.checkout, ".env")).mode & 0o777, 0o600);
+
+    // The copy: the same bytes, the previous image line with it, nothing for a -shm that wasn't there.
+    const [folder, ...others] = backups();
+    assert.deepEqual(others, []);
+    assert.match(folder ?? "", /^\d{8}-\d{6}-\d{6}-1\.1\.0$/);
+    const copy = path.join(dirs.backup, folder as string);
+    assert.deepEqual(fs.readdirSync(copy).sort(), ["fastmemo.db", "fastmemo.db-wal", "image.env"]);
+    assert.equal(read(copy, "fastmemo.db"), "notes at 1.1.0");
+    assert.equal(read(copy, "fastmemo.db-wal"), "wal at 1.1.0");
+    assert.equal(read(copy, "image.env"), "FASTMEMO_IMAGE=\n");
+    assert.equal(fs.existsSync(marker()), false);
+  });
+
+  test("adds the image line to a .env that has none", async () => {
+    fs.writeFileSync(path.join(dirs.checkout, ".env"), "FASTMEMO_ACCESS_KEY=0123456789abcdef");
+    request({ version: "1.2.0" });
+    await runUpdater();
+    assert.equal(status().state, "done");
+    assert.equal(env(), `FASTMEMO_ACCESS_KEY=0123456789abcdef\n${PINNED}\n`);
+    assert.equal(read(dirs.backup, backups()[0] as string, "image.env"), "");
+  });
+
+  test("puts the previous image and database back when the new version doesn't become healthy", async () => {
+    writeConfig({ HEALTH_TIMEOUT: "2" });
+    setState({ health: { new: "unhealthy" }, migrate: true });
+    request({ version: "1.2.0" });
+    const started = Date.now();
+    const result = await runUpdater();
+    assert.equal(result.code, 0);
+    assert.ok(Date.now() - started > 1500);
+    assert.deepEqual(
+      { ...status(), at: 0 },
+      {
+        state: "rolled_back",
+        version: "1.2.0",
+        message: "the new version did not become healthy; the previous version is running again",
+        at: 0,
+        verified: false,
+      }
+    );
+    assert.equal(env(), ENV);
+    assertDatabaseBack();
+    // The previous image is the one started last, and waited for.
+    assert.deepEqual(
+      ups().map((call) => call.image),
+      [PINNED, "FASTMEMO_IMAGE="]
+    );
+    assert.equal(calls().at(-1)?.image, "FASTMEMO_IMAGE=");
+    assert.ok(isHealth(calls().at(-1) as Call));
+    assert.equal(fs.existsSync(marker()), false);
+    // The copy stays, for the record.
+    assert.equal(backups().length, 1);
+  });
+
+  test("rolls back when the new version can't be started", async () => {
+    setState({ upFails: ["new"] });
+    request({ version: "1.2.0" });
+    await runUpdater();
+    assert.deepEqual(
+      [status().state, status().message],
+      ["rolled_back", "the new version could not be started; the previous version is running again"]
+    );
+    assert.equal(env(), ENV);
+    assertDatabaseBack();
+    assert.equal(ups().at(-1)?.image, "FASTMEMO_IMAGE=");
+  });
+
+  test("a rollback step that fails doesn't stop the others, and the status says to check the log", async () => {
+    writeConfig({ HEALTH_TIMEOUT: "1" });
+    setState({ health: { new: "unhealthy" }, migrate: true, stopFails: ["new"] });
+    request({ version: "1.2.0" });
+    const result = await runUpdater();
+    assert.equal(result.code, 0);
+    assert.match(result.stderr, /stopping the server/);
+    assert.deepEqual(
+      [status().state, status().message],
+      ["failed", "the update could not be undone completely: check the updater's log (journalctl -u fastmemo-updater)"]
+    );
+    // Everything after the failed stop still happened.
+    assert.equal(env(), ENV);
+    assertDatabaseBack();
+    assert.equal(ups().at(-1)?.image, "FASTMEMO_IMAGE=");
+    assert.equal(fs.existsSync(marker()), false);
+  });
+
+  test("never starts the previous image on a database it couldn't put back", async () => {
+    writeConfig({ HEALTH_TIMEOUT: "1" });
+    setState({ health: { new: "unhealthy" }, migrate: true, loseBackup: true });
+    request({ version: "1.2.0" });
+    const result = await runUpdater();
+    assert.match(result.stderr, /putting the database back/);
+    assert.deepEqual(
+      [status().state, status().message],
+      [
+        "failed",
+        "the database could not be put back, so the new version was started again: check the updater's log (journalctl -u fastmemo-updater)",
+      ]
+    );
+    // The new version may have migrated it: the previous one would refuse it, so the new one runs on.
+    assert.equal(read(dirs.data, "fastmemo.db"), "migrated by 1.2.0");
+    assert.equal(env(), `FASTMEMO_ACCESS_KEY=0123456789abcdef\n${PINNED}\nTZ=Europe/Rome\n`);
+    assert.equal(ups().at(-1)?.image, PINNED);
+  });
+
+  test("fails before stopping anything when there isn't room for the copy", async () => {
+    // Sparse: as big as it says for the free-space check, nothing on the disk.
+    fs.truncateSync(path.join(dirs.data, "fastmemo.db"), 15 * 1024 ** 4);
+    request({ version: "1.2.0" });
+    await runUpdater();
+    assert.deepEqual(
+      [status().state, status().message],
+      ["failed", "there is not enough free space to back up the database, nothing was changed"]
+    );
+    assert.equal(stopped(), false);
+    assert.deepEqual(backups(), []);
+    assert.equal(env(), ENV);
+    assert.equal(fs.existsSync(marker()), false);
+  });
+
+  test("refuses a database in the volume that is a symlink, without stopping anything", async () => {
+    const secret = path.join(root, "secret.db");
+    fs.writeFileSync(secret, "not the database");
+    for (const name of ["fastmemo.db", "fastmemo.db-wal"]) {
+      const file = path.join(dirs.data, name);
+      fs.rmSync(file);
+      fs.symlinkSync(secret, file);
+      request({ version: "1.2.0" });
+      await runUpdater();
+      assert.deepEqual(
+        [status().state, status().message],
+        ["refused", "the database in the volume is not a plain file: update it with the commands in the dashboard"],
+        name
+      );
+      fs.rmSync(file);
+      fs.writeFileSync(file, "restored by the test");
+    }
+    assert.equal(stopped(), false);
+    assert.deepEqual(backups(), []);
+    assert.equal(env(), ENV);
+  });
+
+  test("rolls back when it is stopped while waiting for the new version", async () => {
+    writeConfig({ HEALTH_TIMEOUT: "60" });
+    setState({ health: { new: "starting" }, migrate: true });
+    request({ version: "1.2.0" });
+    const { done, child } = startUpdater();
+    await until(() => calls().some(isHealth));
+    assert.ok(calls().some(isHealth));
+    child.kill("SIGTERM");
+    await done;
+    assert.deepEqual(
+      [status().state, status().message, status().verified],
+      ["rolled_back", "the update was interrupted; the previous version is running again", false]
+    );
+    assert.equal(env(), ENV);
+    assertDatabaseBack();
+    assert.equal(ups().at(-1)?.image, "FASTMEMO_IMAGE=");
+    assert.equal(fs.existsSync(marker()), false);
+  });
+
+  test("a stop asked for during a rollback waits for it to finish", async () => {
+    writeConfig({ HEALTH_TIMEOUT: "3" });
+    setState({ health: { new: "unhealthy", old: "starting" }, migrate: true });
+    request({ version: "1.2.0" });
+    const { done, child } = startUpdater();
+    await until(() => calls().some((call) => isHealth(call) && call.image === "FASTMEMO_IMAGE="));
+    child.kill("SIGTERM");
+    const result = await done;
+    assert.notEqual(result.code, 0);
+    assert.deepEqual(
+      [status().state, status().message],
+      [
+        "rolled_back",
+        "the new version did not become healthy; the previous version was started again but is not healthy yet: check the containers",
+      ]
+    );
+    assert.equal(env(), ENV);
+    assertDatabaseBack();
+    assert.equal(fs.existsSync(marker()), false);
+  });
+
+  test("at the next run (boot), undoes a switch it couldn't finish, without a request", async () => {
+    // Written with a trailing slash: the marker's folder must still count as one of its copies.
+    writeConfig({ BACKUP_DIR: `${dirs.backup}/` });
+    const folder = path.join(dirs.backup, "20261022-000000-000000-1.1.0");
+    fs.mkdirSync(folder);
+    fs.writeFileSync(path.join(folder, "fastmemo.db"), "notes at 1.1.0");
+    fs.writeFileSync(path.join(folder, "fastmemo.db-wal"), "wal at 1.1.0");
+    fs.writeFileSync(path.join(folder, "image.env"), "FASTMEMO_IMAGE=\n");
+    fs.writeFileSync(path.join(dirs.checkout, ".env"), `FASTMEMO_ACCESS_KEY=0123456789abcdef\n${PINNED}\nTZ=Europe/Rome\n`);
+    fs.writeFileSync(path.join(dirs.data, "fastmemo.db"), "migrated by 1.2.0");
+    fs.writeFileSync(path.join(dirs.data, "fastmemo.db-shm"), "shm at 1.2.0");
+    const record = {
+      version: "1.2.0",
+      current: "1.1.0",
+      line: "FASTMEMO_IMAGE=",
+      image: PINNED,
+      folder,
+      data: dirs.data,
+      verified: true,
+    };
+    fs.writeFileSync(marker(), JSON.stringify(record));
+    assert.equal((await runUpdater()).code, 0);
+    assert.deepEqual(
+      { ...status(), at: 0 },
+      {
+        state: "rolled_back",
+        version: "1.2.0",
+        message: "the update was interrupted; the previous version is running again",
+        at: 0,
+        verified: true,
+      }
+    );
+    assert.equal(env(), ENV);
+    assertDatabaseBack();
+    assert.equal(stopped(), true);
+    assert.equal(ups().at(-1)?.image, "FASTMEMO_IMAGE=");
+    assert.equal(fs.existsSync(marker()), false);
+    assert.deepEqual(backups(), ["20261022-000000-000000-1.1.0"]);
+
+    // Stopped before the copy was made: nothing to put back but the server to start again.
+    resetCalls();
+    fs.writeFileSync(marker(), JSON.stringify({ ...record, folder: null }));
+    fs.writeFileSync(path.join(dirs.data, "fastmemo.db"), "notes since");
+    await runUpdater();
+    assert.equal(status().state, "rolled_back");
+    assert.equal(read(dirs.data, "fastmemo.db"), "notes since");
+    assert.equal(ups().length, 1);
+    assert.equal(fs.existsSync(marker()), false);
+  });
+
+  test("ignores and removes a switch marker it can't trust", async () => {
+    const elsewhere = path.join(root, "20261022-000000-000000-1.1.0");
+    fs.mkdirSync(elsewhere);
+    fs.writeFileSync(path.join(elsewhere, "fastmemo.db"), "not my notes");
+    const record = {
+      version: "1.2.0",
+      current: "1.1.0",
+      line: "FASTMEMO_IMAGE=",
+      image: PINNED,
+      data: dirs.data,
+      verified: false,
+    };
+    for (const bad of [
+      "{nope",
+      JSON.stringify([]),
+      JSON.stringify({ ...record, folder: elsewhere }),
+      JSON.stringify({ ...record, folder: null, line: "FASTMEMO_IMAGE=x\nEVIL=1" }),
+      JSON.stringify({ ...record, folder: null, data: "relative" }),
+      JSON.stringify({ ...record, folder: null, current: "1.1" }),
+      JSON.stringify({ ...record, folder: null, verified: 1 }),
+    ]) {
+      fs.writeFileSync(marker(), bad);
+      assert.equal((await runUpdater()).code, 0);
+      assert.equal(fs.existsSync(marker()), false, bad);
+    }
+    assert.deepEqual(calls(), []);
+    assert.equal(read(dirs.data, "fastmemo.db"), "notes at 1.1.0");
+    assert.equal(env(), ENV);
+  });
+
+  test("keeps the last 3 copies, the new one always among them", async () => {
+    // One copy from a clock that ran ahead: by name it is newer than the one made now.
+    for (const name of ["20250101-000000-000000-1.0.0", "20250102-000000-000000-1.0.1", "20990101-000000-000000-1.0.2"]) {
+      fs.mkdirSync(path.join(dirs.backup, name));
+      fs.writeFileSync(path.join(dirs.backup, name, "fastmemo.db"), name);
+    }
+    fs.mkdirSync(path.join(dirs.backup, "not-a-copy"));
+    request({ version: "1.2.0" });
+    await runUpdater();
+    assert.equal(status().state, "done");
+    const left = backups();
+    assert.equal(left.length, 3);
+    assert.deepEqual(left.slice(0, 1), ["20250102-000000-000000-1.0.1"]);
+    assert.ok(left.includes("20990101-000000-000000-1.0.2"));
+    assert.ok(left.some((name) => name.endsWith("-1.1.0")));
+    assert.equal(fs.existsSync(path.join(dirs.backup, "not-a-copy")), true);
   });
 });
