@@ -240,10 +240,15 @@ class Switch:
             and isinstance(data, str)
             and os.path.isabs(data)
             and (record.get("verified") is None or isinstance(record.get("verified"), bool))
+            and isinstance(record.get("new_started"), bool)
         )
 
     def clear(self):
         remove(self.path)
+        try:
+            sync_folder(self.directory)
+        except OSError:
+            pass
 
 
 def remove(path):
@@ -558,7 +563,8 @@ def check_space(config, files):
 
 
 def copy_plain(source, target):
-    """Copies a regular file without following symlinks at either end, onto the disk before it returns."""
+    """Copies a regular file, with its mode and owner, without following symlinks at either end, onto the disk before
+    it returns."""
     fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as reader:
         info = os.fstat(reader.fileno())
@@ -568,6 +574,7 @@ def copy_plain(source, target):
         with os.fdopen(out, "wb") as writer:
             shutil.copyfileobj(reader, writer, 1024 * 1024)
             os.fchmod(writer.fileno(), stat.S_IMODE(info.st_mode))
+            os.fchown(writer.fileno(), info.st_uid, info.st_gid)
             writer.flush()
             os.fsync(writer.fileno())
 
@@ -611,9 +618,11 @@ def prune(config, new):
 
 
 def restore(data, folder):
-    """Puts the copied database back, owned like the volume's folder, whatever is in its place now.
+    """Puts the copied database back, each file with the mode and owner it had, whatever is in its place now.
 
-    The copy is checked first: a database file missing from it never removes the one in the volume.
+    All or nothing: every file is written next to its place and on the disk first. Only then are they renamed over
+    the live ones (a power cut during the renames is undone again by the next run), so a failure part-way never
+    leaves the database of one version with the WAL of the other.
     """
     saved = {}
     for name in DATABASE_FILES:
@@ -624,33 +633,41 @@ def restore(data, folder):
         if not stat.S_ISREG(info.st_mode):
             raise OSError(f"{name} in {folder} is not a regular file")
         saved[name] = info
+    # A copy without its database never removes the one in the volume.
     if DATABASE_FILES[0] not in saved:
         raise OSError(f"{folder} has no {DATABASE_FILES[0]}")
-    owner = os.stat(data)
-    for name in DATABASE_FILES:
-        target = os.path.join(data, name)
-        try:
-            if stat.S_ISDIR(os.lstat(target).st_mode):
-                shutil.rmtree(target)
-            elif name not in saved:
-                os.unlink(target)
-        except FileNotFoundError:
-            pass
-        if name not in saved:
-            continue
-        handle, temporary = tempfile.mkstemp(dir=data, prefix=".restore-")
-        try:
+    staged = {}
+    try:
+        for name, info in saved.items():
             source = os.open(os.path.join(folder, name), os.O_RDONLY | os.O_NOFOLLOW)
-            with os.fdopen(handle, "wb") as writer, os.fdopen(source, "rb") as reader:
-                shutil.copyfileobj(reader, writer, 1024 * 1024)
-                writer.flush()
-                os.fsync(writer.fileno())
-            os.chmod(temporary, stat.S_IMODE(saved[name].st_mode))
-            os.chown(temporary, owner.st_uid, owner.st_gid)
-            os.replace(temporary, target)
-        except BaseException:
+            with os.fdopen(source, "rb") as reader:
+                handle, staged[name] = tempfile.mkstemp(dir=data, prefix=".restore-")
+                with os.fdopen(handle, "wb") as writer:
+                    shutil.copyfileobj(reader, writer, 1024 * 1024)
+                    os.fchmod(writer.fileno(), stat.S_IMODE(info.st_mode))
+                    os.fchown(writer.fileno(), info.st_uid, info.st_gid)
+                    writer.flush()
+                    os.fsync(writer.fileno())
+    except BaseException:
+        for temporary in staged.values():
             remove(temporary)
-            raise
+        raise
+    # The WAL and -shm first, the database last; what the copy hasn't got goes.
+    try:
+        for name in reversed(DATABASE_FILES):
+            target = os.path.join(data, name)
+            try:
+                if stat.S_ISDIR(os.lstat(target).st_mode):
+                    shutil.rmtree(target)
+                elif name not in staged:
+                    os.unlink(target)
+            except FileNotFoundError:
+                pass
+            if name in staged:
+                os.replace(staged.pop(name), target)
+    finally:
+        for temporary in staged.values():
+            remove(temporary)
     sync_folder(data)
 
 
@@ -678,6 +695,21 @@ def healthy(config):
         time.sleep(min(3, left))
 
 
+def running(config):
+    """Whether the server's container may still be running. Unknown counts as running."""
+    try:
+        ids = compose(config, "ps", "-q", config["SERVICE"], timeout=60).stdout.split()
+        for each in ids:
+            if not CONTAINER_ID.fullmatch(each):
+                return True
+            found = run(config, "container", "inspect", "--format", "{{.State.Running}}", each, check=False, timeout=60)
+            if found.returncode != 0 or found.stdout.strip() != "false":
+                return True
+        return False
+    except Failed:
+        return True
+
+
 def attempt(what, action):
     """One rollback step: True when it worked. A failure is logged and the rollback goes on."""
     try:
@@ -697,11 +729,18 @@ def roll_back(config, status, switch, record, reason):
     try:
         service = config["SERVICE"]
         stopped = attempt("stopping the server", lambda: compose(config, "stop", service, timeout=STOP_TIMEOUT))
-        database_back = record["folder"] is None or attempt(
-            "putting the database back", lambda: restore(record["data"], record["folder"])
+        # Never under a live SQLite: it would write on through the files it holds open, and remove the WAL put back.
+        still_running = not stopped and running(config)
+        if still_running:
+            log("rollback: the server is still running, so its database was left as it is")
+        database_back = record["folder"] is None or (
+            not still_running
+            and attempt("putting the database back", lambda: restore(record["data"], record["folder"]))
         )
         # A database the new version may have migrated stays with it: the previous version would refuse to open it.
-        line = record["line"] if database_back else record["image"]
+        # If the new version never started, the database in the volume is still the previous version's.
+        keep_new = not database_back and record["new_started"]
+        line = record["image"] if keep_new else record["line"]
         env_back = attempt(
             "putting the image line back",
             lambda: write_file(config["ENV_FILE"], with_image(read_env(config["ENV_FILE"]), line)),
@@ -709,11 +748,15 @@ def roll_back(config, status, switch, record, reason):
         started = attempt("starting the server", lambda: start(config))
         # From here the server may take new notes: a later run must not put the copy back over them.
         switch.clear()
-        if not database_back:
+        if keep_new and still_running:
+            status.write(
+                "failed", f"the new version could not be stopped, so it keeps running on its database: {CHECK_THE_LOG}"
+            )
+        elif keep_new:
             status.write(
                 "failed", f"the database could not be put back, so the new version was started again: {CHECK_THE_LOG}"
             )
-        elif not (stopped and env_back and started):
+        elif not (stopped and database_back and env_back and started):
             status.write("failed", f"the update could not be undone completely: {CHECK_THE_LOG}")
         elif not healthy(config):
             status.write(
@@ -736,6 +779,15 @@ def switch_to(config, status, switch, current, reference, volume):
     data = data_folder(config, volume)
     # Checked before anything stops; again once it has (the files may have grown).
     check_space(config, database_files(data))
+    # Under systemd's ProtectSystem=strict a folder left out of ReadWritePaths is read-only: found out now, not once
+    # the server is stopped.
+    if not os.access(data, os.W_OK):
+        raise Failed("the updater can't write the data volume (check its ReadWritePaths), nothing was changed")
+    env_file = config["ENV_FILE"]
+    if not os.access(os.path.dirname(env_file), os.W_OK) or (
+        os.path.lexists(env_file) and not os.access(env_file, os.W_OK)
+    ):
+        raise Failed("the updater can't write the checkout's .env (check its ReadWritePaths), nothing was changed")
 
     record = {
         "version": status.version,
@@ -745,6 +797,8 @@ def switch_to(config, status, switch, current, reference, volume):
         "folder": None,
         "data": data,
         "verified": status.verified,
+        # Until the new version has started, the database in the volume is still the previous version's.
+        "new_started": False,
     }
     switch.save(record)
     try:
@@ -767,6 +821,8 @@ def switch_to(config, status, switch, current, reference, volume):
         switch.save(record)
         status.write("restarting")
         write_file(config["ENV_FILE"], with_image(env_text, record["image"]))
+        record["new_started"] = True
+        switch.save(record)
         if start(config):
             if healthy(config):
                 # The marker goes first: a power cut now must not undo a version that works.
