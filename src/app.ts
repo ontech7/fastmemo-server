@@ -11,6 +11,7 @@ import { apiRoutes } from "./routes.ts";
 import { Service } from "./service.ts";
 import { Stats } from "./stats.ts";
 import type { Database } from "./store/db.ts";
+import type { Updates } from "./updates.ts";
 
 export interface AppOptions {
   config: Pick<Config, "maxDevices" | "maxNoteBytes" | "maxBodyBytes" | "trustProxy">;
@@ -19,6 +20,7 @@ export interface AppOptions {
   adminKey: string;
   instance: string;
   version: string;
+  updates?: Updates;
 }
 
 export interface App {
@@ -81,7 +83,11 @@ export const createApp = (options: AppOptions): App => {
 
   const server = createHttpServer({
     routes: [
-      ...apiRoutes(service, { version: options.version, instance: options.instance }),
+      ...apiRoutes(service, {
+        version: options.version,
+        instance: options.instance,
+        update: () => options.updates?.summary() ?? null,
+      }),
       ...adminRoutes({
         service,
         stats,

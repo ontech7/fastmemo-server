@@ -226,6 +226,7 @@ Settings go in `.env` (on Coolify, in Environment Variables). Run `docker compos
 | `MAX_BODY_MB`             | `64`           | The largest request, in MB.                                                                                               |
 | `TRUST_PROXY`             | `false`        | `true` behind Tailscale Serve, Caddy, Cloudflare Tunnel, nginx, Traefik or Coolify (trusted from private addresses only). |
 | `LOG_LEVEL`               | `info`         | `debug`, `info`, `warn` or `error`.                                                                                       |
+| `UPDATE_CHECK`            | `on`           | `off` stops the check, every 6 hours, for a newer release on GitHub (the dashboard and the app say when there is one).    |
 | `DATABASE_URL`            | SQLite         | `postgres://user:password@host:5432/db` for PostgreSQL.                                                                   |
 | `DATA_DIR`                | `./data`       | Without Docker: where the SQLite file goes (the image uses `/data`).                                                      |
 | `HOST`                    | `127.0.0.1`    | Without Docker: the address to listen on. `0.0.0.0` puts the server on your network.                                      |

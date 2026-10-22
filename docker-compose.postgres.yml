@@ -26,6 +26,7 @@ services:
       MAX_BODY_MB: ${MAX_BODY_MB:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
       LOG_LEVEL: ${LOG_LEVEL:-}
+      UPDATE_CHECK: ${UPDATE_CHECK:-}
       PORT: "8787"
       DATABASE_URL: postgres://fastmemo:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/fastmemo
     depends_on:

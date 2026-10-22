@@ -8,6 +8,7 @@ import type { Database } from "../src/store/db.ts";
 import { openPostgres } from "../src/store/postgres.ts";
 import { migrate } from "../src/store/schema.ts";
 import { openSqlite } from "../src/store/sqlite.ts";
+import type { Updates } from "../src/updates.ts";
 
 /*
  * Starts a server on a free port over a fresh database: SQLite in a temp file, or the Postgres at TEST_DATABASE_URL
@@ -58,7 +59,11 @@ export interface TestServer {
   close(): Promise<void>;
 }
 
-export const startServer = async (limits: Limits = {}, db?: Database): Promise<TestServer> => {
+export const startServer = async (
+  limits: Limits = {},
+  db?: Database,
+  options: { updates?: Updates } = {}
+): Promise<TestServer> => {
   db ??= await openTestDb();
   await migrate(db);
   const app = createApp({
@@ -73,6 +78,7 @@ export const startServer = async (limits: Limits = {}, db?: Database): Promise<T
     adminKey: ADMIN_KEY,
     instance: "test-instance",
     version: "test",
+    updates: options.updates,
   });
   const port = await app.listen(0, "127.0.0.1");
   const base = `http://127.0.0.1:${port}`;

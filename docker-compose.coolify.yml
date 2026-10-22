@@ -23,6 +23,7 @@ services:
       MAX_DEVICES: ${MAX_DEVICES:-10}
       MAX_NOTE_MB: ${MAX_NOTE_MB:-5}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      UPDATE_CHECK: ${UPDATE_CHECK:-}
       PORT: "8787"
       DATA_DIR: /data
     volumes:

@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, mock, test } from "node:test";
 
 import { silenceLogs } from "../src/log.ts";
+import { ACCESS_KEY, startServer } from "./helpers.ts";
 import {
   compareVersions,
   githubReleases,
@@ -264,6 +265,60 @@ describe("githubReleases", () => {
       } finally {
         await stub.close();
       }
+    }
+  });
+});
+
+describe("update in /v1/info", () => {
+  const start = async (current: string, releases: Release[] | null) => {
+    const u = updates(current, async () => releases ?? []);
+    const server = await startServer({}, undefined, releases === null ? {} : { updates: u });
+    await u.check();
+    return server;
+  };
+  const info = async (server: Awaited<ReturnType<typeof startServer>>) => {
+    const res = await server.call("GET", "/v1/info", { key: ACCESS_KEY });
+    assert.equal(res.status, 200);
+    return res.body;
+  };
+  const BASE = {
+    server: "fastmemo-server",
+    version: "test",
+    protocol: 1,
+    instance: "test-instance",
+    maxDevices: 5,
+    maxNoteBytes: 1024 * 1024,
+  };
+
+  test("tells a newer release, and the security flag, without touching the other fields", async () => {
+    const server = await start("1.0.0", RELEASES);
+    try {
+      const body = await info(server);
+      assert.deepEqual(body.update, { latest: "1.2.0", security: true, url: release("1.2.0").url });
+      const { update, ...rest } = body;
+      assert.deepEqual(rest, BASE);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("has no update field when already up to date", async () => {
+    const server = await start("1.2.0", RELEASES);
+    try {
+      const body = await info(server);
+      assert.equal("update" in body, false);
+      assert.deepEqual(body, BASE);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("has no update field when the server has no release check", async () => {
+    const server = await start("1.0.0", null);
+    try {
+      assert.equal("update" in (await info(server)), false);
+    } finally {
+      await server.close();
     }
   });
 });

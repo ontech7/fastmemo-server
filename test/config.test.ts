@@ -27,4 +27,30 @@ describe("config", () => {
     assert.equal(config.accessKey, KEY);
     assert.equal(config.adminKey, null);
   });
+
+  test("the release check is on unless turned off, and says so when the value is neither", () => {
+    const check = (value?: string) =>
+      loadConfig({ FASTMEMO_ACCESS_KEY: KEY, ...(value === undefined ? {} : { UPDATE_CHECK: value }) }).updateCheck;
+    assert.equal(check(), true);
+    assert.equal(check(""), true);
+    for (const value of ["off", "false", "0", "no", "OFF", "False", " No "]) assert.equal(check(value), false, value);
+    for (const value of ["on", "true", "1", "yes", "ON", "True"]) assert.equal(check(value), true, value);
+    assert.throws(
+      () => check("maybe"),
+      (e: unknown) => e instanceof ConfigError && e.message.startsWith("UPDATE_CHECK")
+    );
+  });
+
+  test("the updater's folders are off unless set", () => {
+    const unset = loadConfig({ FASTMEMO_ACCESS_KEY: KEY });
+    assert.equal(unset.updateRequestDir, null);
+    assert.equal(unset.updateStatusDir, null);
+    const set = loadConfig({
+      FASTMEMO_ACCESS_KEY: KEY,
+      UPDATE_REQUEST_DIR: " /updates/request ",
+      UPDATE_STATUS_DIR: "/updates/status",
+    });
+    assert.equal(set.updateRequestDir, "/updates/request");
+    assert.equal(set.updateStatusDir, "/updates/status");
+  });
 });

@@ -26,6 +26,7 @@ services:
       MAX_NOTE_MB: ${MAX_NOTE_MB:-}
       MAX_BODY_MB: ${MAX_BODY_MB:-}
       LOG_LEVEL: ${LOG_LEVEL:-}
+      UPDATE_CHECK: ${UPDATE_CHECK:-}
       DATABASE_URL: ${DATABASE_URL:-}
       PORT: "8787"
       DATA_DIR: /data

@@ -31,6 +31,7 @@ services:
       MAX_BODY_MB: ${MAX_BODY_MB:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
       LOG_LEVEL: ${LOG_LEVEL:-}
+      UPDATE_CHECK: ${UPDATE_CHECK:-}
       DATABASE_URL: ${DATABASE_URL:-}
       # Inside the container: always this port and this folder (PORT above is the one on your computer).
       PORT: "8787"
