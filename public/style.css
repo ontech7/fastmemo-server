@@ -524,6 +524,134 @@ tr:last-child td {
   margin-top: 2px;
 }
 
+/* Updates */
+
+.server-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.server-row p {
+  margin: 0;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--accent-muted-border);
+  background: var(--accent-muted);
+  color: var(--text);
+}
+
+.badge-update {
+  background: var(--accent-muted);
+  border-color: var(--accent-muted-border);
+}
+
+.badge-security {
+  background: rgba(224, 104, 106, 0.18);
+  border-color: rgba(224, 104, 106, 0.6);
+  color: #f1a0a1;
+}
+
+#updates-card .section-head {
+  margin-bottom: 8px;
+}
+
+.update-status {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+  font-size: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.update-status.ok {
+  border-left: 3px solid var(--ok);
+}
+
+.update-status.bad {
+  border-left: 3px solid var(--error);
+}
+
+.notes {
+  margin-top: 12px;
+  max-height: 340px;
+  overflow-y: auto;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.release {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.release:last-child {
+  border-bottom: 0;
+}
+
+.release h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.release h3 a {
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.release h4,
+.release h5 {
+  margin: 10px 0 4px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.release p {
+  margin: 4px 0;
+}
+
+.release ul {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.release a,
+.update-status a {
+  color: var(--accent-soft);
+}
+
+#update-commands pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  overflow-x: auto;
+}
+
+#update-commands p {
+  margin: 8px 0 0;
+}
+
 .footer {
   text-align: center;
   margin: 24px 0 8px;

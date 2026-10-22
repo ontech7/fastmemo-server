@@ -31,7 +31,10 @@
           <img src="/assets/favicon.png" alt="" width="28" height="28" />
           <div>
             <h1>FastMemo Server</h1>
-            <p class="muted small" id="server-line"></p>
+            <div class="server-row">
+              <p class="muted small" id="server-line"></p>
+              <span id="update-badge" class="badge" hidden></span>
+            </div>
           </div>
         </div>
         <div class="topbar-actions">
@@ -42,6 +45,25 @@
       </header>
 
       <section class="cards" id="cards" aria-label="Summary"></section>
+
+      <section class="card" id="updates-card">
+        <div class="section-head">
+          <h2>Updates</h2>
+          <div id="update-actions" class="row-actions">
+            <button id="update-check" class="ghost" type="button">Check now</button>
+            <button id="update-install" class="primary" type="button" hidden></button>
+          </div>
+        </div>
+        <div id="updates-line" class="muted small"></div>
+        <div id="update-status" class="update-status" role="status" hidden></div>
+        <div id="update-notes" class="notes" hidden></div>
+        <div id="update-commands" hidden>
+          <p class="muted small" id="update-commands-text"></p>
+          <pre id="update-commands-pre"></pre>
+          <button id="update-copy" class="ghost small-button" type="button">Copy</button>
+          <p class="muted small" id="update-commands-note"></p>
+        </div>
+      </section>
 
       <section class="card">
         <div class="section-head">

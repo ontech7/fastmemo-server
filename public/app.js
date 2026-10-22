@@ -70,8 +70,14 @@ const toast = (message) => {
 
 class AuthError extends Error {}
 
-const api = async (method, path, { raw = false } = {}) => {
-  const res = await fetch(`/admin/api${path}`, { method, headers: { Authorization: `Bearer ${key}` } });
+const api = async (method, path, { raw = false, body } = {}) => {
+  const headers = { Authorization: `Bearer ${key}` };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const res = await fetch(`/admin/api${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
   if (res.status === 401) throw new AuthError("Wrong key");
   if (res.status === 429) throw new AuthError("Too many attempts: wait a few minutes");
   if (!res.ok) {
@@ -278,6 +284,184 @@ const renderBackup = (driver) => {
   $("backup").disabled = !sqlite;
 };
 
+/* --- Updates --- */
+
+const FINAL_STATES = ["done", "failed", "rolled_back", "refused"];
+const STATE_TEXT = {
+  queued: "Waiting for the updater",
+  checking: "Checking the release",
+  downloading: "Downloading the new version",
+  verifying: "Verifying the image",
+  backing_up: "Copying the database",
+  restarting: "Restarting on the new version",
+  done: "Updated",
+  failed: "Failed",
+  rolled_back: "Rolled back to the previous version",
+  refused: "Refused",
+};
+
+let lastUpdates = null;
+let lastNotesKey = null;
+
+/** Release notes are text from GitHub: built as nodes, links only to https, never HTML. */
+const inline = (text) => {
+  const parts = [];
+  // One level of parentheses is allowed inside the address, so javascript:alert(1) is swallowed whole.
+  const link = /\[([^\]]*)\]\(((?:[^()\s]|\([^()\s]*\))*)\)/g;
+  let from = 0;
+  for (let m = link.exec(text); m; m = link.exec(text)) {
+    parts.push(text.slice(from, m.index));
+    parts.push(
+      m[2].startsWith("https://") ? el("a", { href: m[2], rel: "noopener noreferrer", target: "_blank", text: m[1] }) : m[1]
+    );
+    from = m.index + m[0].length;
+  }
+  parts.push(text.slice(from));
+  return parts;
+};
+
+const renderNotes = (markdown) => {
+  const nodes = [];
+  let paragraph = [];
+  let list = null;
+  const flush = () => {
+    if (paragraph.length > 0) nodes.push(el("p", {}, inline(paragraph.join(" "))));
+    paragraph = [];
+    list = null;
+  };
+  for (const raw of String(markdown).split(/\r?\n/)) {
+    const line = raw.trim();
+    const heading = /^(##|###)\s+(.+)$/.exec(line);
+    const item = /^[-*]\s+(.+)$/.exec(line);
+    if (line === "") {
+      flush();
+    } else if (heading) {
+      flush();
+      nodes.push(el(heading[1] === "##" ? "h4" : "h5", {}, inline(heading[2])));
+    } else if (item) {
+      if (paragraph.length > 0) flush();
+      if (!list) {
+        list = el("ul");
+        nodes.push(list);
+      }
+      list.append(el("li", {}, inline(item[1])));
+    } else {
+      list = null;
+      paragraph.push(line);
+    }
+  }
+  flush();
+  return nodes;
+};
+
+const copyText = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Copied");
+  } catch {
+    toast("Couldn't copy: select the text and copy it");
+  }
+};
+
+const renderUpdates = (u) => {
+  lastUpdates = u;
+  const badge = $("update-badge");
+  badge.hidden = !u.latest;
+  if (u.latest) {
+    badge.textContent = `${u.security ? "Security update" : "Update"} ${u.latest}`;
+    badge.className = `badge ${u.security ? "badge-security" : "badge-update"}`;
+  }
+
+  const off = !u.enabled;
+  const pending = u.releases.length > 0;
+  const status = off ? null : u.status;
+  const running = !!status && !FINAL_STATES.includes(status.state);
+  const canInstall = !off && u.installable && u.sameMajor && !!u.latest;
+
+  const line = $("updates-line");
+  if (off) {
+    line.replaceChildren("Update checks are off (UPDATE_CHECK).");
+  } else {
+    const lines = [
+      el("div", {
+        text: `Running ${u.current} · ${u.latest ? `latest ${u.latest}` : "no newer version"} · last check ${u.checkedAt ? ago(u.checkedAt) : "not done yet"}`,
+      }),
+    ];
+    if (u.error) lines.push(el("div", { class: "error", text: `The last check failed: ${u.error}` }));
+    line.replaceChildren(...lines);
+  }
+
+  $("update-check").hidden = off;
+  const install = $("update-install");
+  install.hidden = !canInstall;
+  install.disabled = running;
+  if (canInstall) install.textContent = `Install ${u.latest}`;
+
+  const statusBox = $("update-status");
+  statusBox.hidden = !status;
+  if (status) {
+    statusBox.replaceChildren(
+      ...[
+        el("b", { text: `${STATE_TEXT[status.state] ?? status.state} (${status.version})` }),
+        status.message ? ` · ${status.message}` : null,
+        status.verified === true ? el("span", { class: "pill ok", text: "Provenance verified" }) : null,
+        status.verified === false ? el("span", { class: "pill warn", text: "Provenance not checked" }) : null,
+      ].filter(Boolean)
+    );
+    statusBox.className = `update-status ${status.state === "done" ? "ok" : FINAL_STATES.includes(status.state) ? "bad" : ""}`;
+  }
+
+  // The notes are redrawn only when they change: the page refreshes every 10 s and would reset the scroll.
+  const notesBox = $("update-notes");
+  notesBox.hidden = off || !pending;
+  const notesKey = off ? "" : u.releases.map((r) => `${r.version}:${r.notes.length}`).join(",");
+  if (notesKey !== lastNotesKey) {
+    lastNotesKey = notesKey;
+    notesBox.replaceChildren(
+      ...u.releases.map((r) =>
+        el(
+          "article",
+          { class: "release" },
+          el(
+            "h3",
+            {},
+            r.version,
+            r.security ? el("span", { class: "badge badge-security", text: "Security" }) : null,
+            r.url.startsWith("https://")
+              ? el("a", { href: r.url, rel: "noopener noreferrer", target: "_blank", text: "Release page" })
+              : null
+          ),
+          ...renderNotes(r.notes)
+        )
+      )
+    );
+  }
+
+  const commands = $("update-commands");
+  const showCommands = !off && pending && !canInstall;
+  commands.hidden = !showCommands;
+  if (showCommands) {
+    const major = u.latest.split(".")[0];
+    $("update-commands-text").textContent = u.sameMajor
+      ? "This setup can't be updated from here. Run, in the folder with the docker-compose.yml:"
+      : "This is a new major version: read the notes above first. Then set the image in .env and run, in the folder with the docker-compose.yml:";
+    $("update-commands-pre").textContent = u.sameMajor
+      ? "docker compose pull && docker compose up -d"
+      : `FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:${major}\ndocker compose pull && docker compose up -d`;
+    $("update-commands-note").textContent =
+      "With other compose files add -f <file> after docker compose. On Coolify: redeploy.";
+  }
+};
+
+const loadUpdates = async () => {
+  try {
+    renderUpdates(await api("GET", "/updates"));
+  } catch (e) {
+    // The last answer stays; only a wrong key matters here.
+    if (e instanceof AuthError) throw e;
+  }
+};
+
 /* --- Flow --- */
 
 const setOnline = (online) => {
@@ -296,6 +480,7 @@ const load = async () => {
     renderFacts(o);
     renderEvents(o.events);
     renderBackup(o.server.database.driver);
+    await loadUpdates();
     return true;
   } catch (e) {
     if (e instanceof AuthError) {
@@ -386,6 +571,35 @@ $("backup").addEventListener("click", async () => {
     button.disabled = false;
   }
 });
+
+$("update-check").addEventListener("click", async () => {
+  const button = $("update-check");
+  button.disabled = true;
+  try {
+    renderUpdates(await api("POST", "/updates/check"));
+    toast("Checked for updates");
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+$("update-install").addEventListener("click", async () => {
+  const version = lastUpdates?.latest;
+  if (!version) return;
+  const message = `Install ${version}? The database is copied first; if the new version isn't healthy within 2 minutes the previous one comes back.`;
+  if (!confirm(message)) return;
+  const button = $("update-install");
+  button.disabled = true;
+  try {
+    renderUpdates(await api("POST", "/updates/install", { body: { version } }));
+    toast("Update asked: the updater picks it up in a few seconds");
+  } catch (e) {
+    toast(e.message);
+    button.disabled = false;
+  }
+});
+$("update-copy").addEventListener("click", () => copyText($("update-commands-pre").textContent));
 
 if (key) start();
 else logout();
