@@ -225,9 +225,9 @@ Open the server's address in a browser and enter the admin key (`FASTMEMO_ADMIN_
   server: is Tailscale on? Is the address right? Is a firewall in the way?
 - With Cloudflare Tunnel, if the browser opens the dashboard but the app can't connect, a Cloudflare security setting may be
   challenging the app (Bot Fight Mode, "I'm Under Attack" mode): an app can't solve a challenge. Turn it off for the domain.
-- The web app and the Windows desktop app need `https://`. The Android, macOS and Linux apps accept `http://` after a warning:
-  type `http://` before a name (`http://nas.home.arpa:8787`); without it the app assumes `https://`, except for an IP address,
-  `localhost` or a `.local` name.
+- The web app needs `https://` (so did the Windows desktop app before 2.0). The Android and desktop apps accept `http://` after
+  a warning: type `http://` before a name (`http://nas.home.arpa:8787`); without it the app assumes `https://`, except for an IP
+  address, `localhost` or a `.local` name.
 - Check the key: it's `FASTMEMO_ACCESS_KEY` in `.env` (on Coolify, in Environment Variables).
 
 **"Too many attempts".** After 20 wrong keys in 15 minutes from the same address, the server refuses that address for a while.

@@ -125,8 +125,8 @@ address and the key.
 
 ## Connect the app
 
-Set up [HTTPS](#https) first: the web app and the Windows desktop app only reach `https://` addresses. To try it on the computer
-that runs the server, `http://localhost:8787` is enough. Then, on each device:
+Set up [HTTPS](#https) first: the web app only reaches `https://` addresses (so did the Windows desktop app before 2.0). To try
+it on the computer that runs the server, `http://localhost:8787` is enough. Then, on each device:
 
 1. Open **Settings → Cloud Sync** and turn on **Enable Cloud sync**.
 2. In **Sync with**, choose **FastMemo Server**.
@@ -138,13 +138,13 @@ notes.
 
 ## HTTPS
 
-Use HTTPS. The web app and the Windows desktop app only connect to `https://` addresses (or to a server on the same computer).
-The Android, macOS and Linux apps also accept `http://`, after a warning. Over plain HTTP, what a device sends isn't encrypted
-on any network it joins, not only at home: a phone set up on your Wi-Fi keeps talking to that address from a café's. Whoever can
-see that traffic can read the note titles and the device's credentials, and with them change or delete notes and remove devices;
-the notes' content stays end-to-end encrypted. The access key only travels when a device connects; after that each device uses
-its own token. If you think one was seen, change the access key and remove and re-add each device: a device's token keeps
-working after a key change.
+Use HTTPS. The web app only connects to `https://` addresses (or to a server on the same computer); so did the Windows desktop
+app before 2.0. The Android app and the desktop apps (macOS, Linux, Windows) also accept `http://`, after a warning. Over plain
+HTTP, what a device sends isn't encrypted on any network it joins, not only at home: a phone set up on your Wi-Fi keeps talking
+to that address from a café's. Whoever can see that traffic can read the note titles and the device's credentials, and with them
+change or delete notes and remove devices; the notes' content stays end-to-end encrypted. The access key only travels when a
+device connects; after that each device uses its own token. If you think one was seen, change the access key and remove and
+re-add each device: a device's token keeps working after a key change.
 
 ### Tailscale (easiest)
 

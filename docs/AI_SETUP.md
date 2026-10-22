@@ -26,8 +26,8 @@ Ask only what you can't find out yourself:
 
 1. **Where will the server run?** This computer, another computer in the house (a NAS, a Raspberry Pi, a home server), or a VPS.
    If it's another machine, you need a terminal on it (SSH); run every command below there.
-2. **Which devices will connect?** If any of them is the **web app** or the **Windows desktop app**, the server needs HTTPS:
-   they only connect to `https://` addresses. (Android, macOS and Linux also accept `http://`, after a warning.)
+2. **Which devices will connect?** If one of them is the **web app**, the server needs HTTPS: it only connects to `https://`
+   addresses (so did the Windows desktop app before 2.0). (Android and the desktop apps also accept `http://`, after a warning.)
 3. **How should the devices reach it?** Recommend in this order:
    - **Tailscale** (easiest): a private network with HTTPS, no domain, nothing open to the internet, and it works away from home
      too. Every device installs the Tailscale app and signs in to the same account. On a NAS, or wherever Tailscale can't be
@@ -217,7 +217,7 @@ Tell the person, in plain words:
 | Cloudflare: the page shows a 502 or "Bad gateway"            | The route's service URL is wrong: it must be `http://fastmemo:8787`.                                                      |
 | Tailscale container: the address doesn't answer              | Not signed in (the link in its logs), or HTTPS Certificates off on the admin's DNS page.                                  |
 | The app says the key is wrong                                | Compare it with `.env`. After 20 wrong tries in 15 minutes, the address is refused for a while: wait a few minutes.       |
-| The web app or the Windows app can't connect to `http://`    | They need HTTPS: set up Tailscale or Caddy.                                                                               |
+| The web app can't connect to `http://`                       | It needs HTTPS (so did the Windows app before 2.0): set up Tailscale or Caddy.                                            |
 
 Anything else: [DEPLOYMENT.md → Troubleshooting](DEPLOYMENT.md#troubleshooting), then the logs
 (`docker compose logs --tail 100 fastmemo`). If it's still stuck, stop and tell the person what you saw; don't change the code.
