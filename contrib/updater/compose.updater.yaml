@@ -1,0 +1,13 @@
+# Lets the dashboard hand install requests to the updater on the host and read its progress. Add it after the compose file
+# you use (any but docker-compose.coolify.yml), and list both in updater.env's COMPOSE_FILE:
+#
+#   docker compose -f docker-compose.yml -f contrib/updater/compose.updater.yaml up -d
+services:
+  fastmemo:
+    environment:
+      UPDATE_REQUEST_DIR: /updates/request
+      UPDATE_STATUS_DIR: /updates/status
+    volumes:
+      # The server leaves a request here; it only reads the status (the updater, as root, writes it).
+      - /var/lib/fastmemo-update/request:/updates/request
+      - /var/lib/fastmemo-update/status:/updates/status:ro
