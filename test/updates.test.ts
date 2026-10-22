@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, mock, test } from "node:test";
 
 import { silenceLogs } from "../src/log.ts";
-import { ACCESS_KEY, startServer } from "./helpers.ts";
+import { ACCESS_KEY, ADMIN_KEY, startServer } from "./helpers.ts";
 import {
   compareVersions,
   githubReleases,
@@ -320,5 +323,338 @@ describe("update in /v1/info", () => {
     } finally {
       await server.close();
     }
+  });
+});
+
+describe("the updater's status and install request", () => {
+  const dirs: string[] = [];
+  const temp = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fastmemo-updates-"));
+    dirs.push(dir);
+    return dir;
+  };
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const installable = (
+    current: string,
+    releases: Release[],
+    extra: { requestDir?: string | null; statusDir?: string | null; sqlite?: boolean; now?: () => number } = {}
+  ) => {
+    const requestDir = extra.requestDir === undefined ? temp() : extra.requestDir;
+    const statusDir = extra.statusDir === undefined ? temp() : extra.statusDir;
+    const u = new Updates({
+      current,
+      fetchReleases: async () => releases,
+      enabled: true,
+      requestDir,
+      statusDir,
+      sqlite: extra.sqlite ?? true,
+      now: extra.now,
+    });
+    return { u, requestDir, statusDir };
+  };
+  const writeStatus = (dir: string, status: unknown) => fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify(status));
+  const NOW = 1_800_000_000_000;
+  const done = { state: "done", version: "1.2.0", message: null, at: NOW, verified: true };
+
+  describe("status()", () => {
+    test("is null with no file, no directory, invalid JSON or an unknown state", () => {
+      const { u, statusDir } = installable("1.0.0", []);
+      assert.equal(u.status(), null);
+      assert.equal(installable("1.0.0", [], { statusDir: null }).u.status(), null);
+      fs.writeFileSync(path.join(statusDir!, "status.json"), "{not json");
+      assert.equal(u.status(), null);
+      writeStatus(statusDir!, { ...done, state: "exploded" });
+      assert.equal(u.status(), null);
+      writeStatus(statusDir!, { ...done, version: "1.2.0; rm" });
+      assert.equal(u.status(), null);
+      writeStatus(statusDir!, [done]);
+      assert.equal(u.status(), null);
+    });
+
+    test("is null for a symlink, even to a valid file", () => {
+      const { u, statusDir } = installable("1.0.0", []);
+      const elsewhere = path.join(temp(), "real.json");
+      fs.writeFileSync(elsewhere, JSON.stringify(done));
+      fs.symlinkSync(elsewhere, path.join(statusDir!, "status.json"));
+      assert.equal(u.status(), null);
+    });
+
+    test("is null for a file over 4096 bytes", () => {
+      const { u, statusDir } = installable("1.0.0", []);
+      writeStatus(statusDir!, { ...done, message: "x".repeat(5000) });
+      assert.equal(u.status(), null);
+    });
+
+    test("returns a valid status as written", () => {
+      const { u, statusDir } = installable("1.0.0", []);
+      writeStatus(statusDir!, done);
+      assert.deepEqual(u.status(), done);
+      writeStatus(statusDir!, { state: "refused", version: "2.0.0", message: "other major", at: NOW });
+      assert.deepEqual(u.status(), { state: "refused", version: "2.0.0", message: "other major", at: NOW, verified: null });
+    });
+
+    test("a non-final state older than an hour is a failure, a final one stays as it was", () => {
+      const { u, statusDir } = installable("1.0.0", [], { now: () => NOW + 2 * 60 * 60 * 1000 });
+      writeStatus(statusDir!, { ...done, state: "restarting", verified: null });
+      assert.deepEqual(u.status(), {
+        ...done,
+        state: "failed",
+        verified: null,
+        message: "the updater stopped without finishing: check its log",
+      });
+      writeStatus(statusDir!, done);
+      assert.equal(u.status()?.state, "done");
+    });
+  });
+
+  describe("installable", () => {
+    test("needs both directories to exist, and SQLite", () => {
+      assert.equal(installable("1.0.0", [], { requestDir: null, statusDir: null }).u.info().installable, false);
+      const missing = path.join(temp(), "nope");
+      assert.equal(installable("1.0.0", [], { requestDir: missing, statusDir: missing }).u.info().installable, false);
+      assert.equal(installable("1.0.0", [], { sqlite: false }).u.info().installable, false);
+      assert.equal(installable("1.0.0", []).u.info().installable, true);
+    });
+
+    test("sameMajor compares the latest release with the running version", async () => {
+      const same = installable("1.0.0", RELEASES).u;
+      assert.equal(same.info().sameMajor, false);
+      await same.check();
+      assert.equal(same.info().sameMajor, true);
+      const other = installable("1.0.0", [release("2.0.0")]).u;
+      await other.check();
+      assert.equal(other.info().sameMajor, false);
+    });
+  });
+
+  describe("requestInstall()", () => {
+    const refused = (u: Updates, version: string, status: number, code: string) =>
+      assert.throws(
+        () => u.requestInstall(version),
+        (e: any) => e.status === status && e.code === code,
+        `${version} -> ${status} ${code}`
+      );
+
+    test("leaves request.json with the version and the time, and nothing else", async () => {
+      const { u, requestDir } = installable("1.0.0", RELEASES);
+      await u.check();
+      u.requestInstall("1.2.0");
+      assert.deepEqual(fs.readdirSync(requestDir!), ["request.json"]);
+      const request = JSON.parse(fs.readFileSync(path.join(requestDir!, "request.json"), "utf8"));
+      assert.deepEqual(Object.keys(request).sort(), ["requestedAt", "version"]);
+      assert.equal(request.version, "1.2.0");
+      assert.equal(typeof request.requestedAt, "number");
+    });
+
+    test("only the latest pending release can be asked for", async () => {
+      const { u, requestDir } = installable("1.0.0", RELEASES);
+      await u.check();
+      refused(u, "1.1.0", 409, "not_available");
+      refused(u, "1.2.0; rm", 409, "not_available");
+      refused(u, "9.9.9", 409, "not_available");
+      refused(u, "../../x", 409, "not_available");
+      assert.deepEqual(fs.readdirSync(requestDir!), []);
+    });
+
+    test("another major is never installed with a click", async () => {
+      const { u } = installable("1.0.0", [release("2.0.0")]);
+      await u.check();
+      refused(u, "2.0.0", 409, "new_major");
+    });
+
+    test("waits for the updater to finish what it is doing", async () => {
+      const { u, statusDir, requestDir } = installable("1.0.0", RELEASES, { now: () => NOW });
+      await u.check();
+      writeStatus(statusDir!, { ...done, state: "downloading", verified: null });
+      refused(u, "1.2.0", 409, "in_progress");
+      assert.deepEqual(fs.readdirSync(requestDir!), []);
+      for (const state of ["done", "failed", "rolled_back", "refused"]) {
+        writeStatus(statusDir!, { ...done, state });
+        u.requestInstall("1.2.0");
+      }
+    });
+
+    test("answers 501 when this setup can't be updated from the dashboard", async () => {
+      for (const extra of [{ requestDir: null, statusDir: null }, { sqlite: false }]) {
+        const { u } = installable("1.0.0", RELEASES, extra);
+        await u.check();
+        refused(u, "1.2.0", 501, "not_installable");
+      }
+    });
+  });
+
+  describe("the admin routes", () => {
+    const start = async (extra: Parameters<typeof installable>[2] = {}) => {
+      let calls = 0;
+      const { requestDir, statusDir } = installable("1.0.0", RELEASES, extra);
+      const counted = new Updates({
+        current: "1.0.0",
+        fetchReleases: async () => (calls++, RELEASES),
+        enabled: true,
+        requestDir,
+        statusDir,
+        sqlite: true,
+      });
+      const server = await startServer({}, undefined, { updates: counted });
+      return { server, requestDir, statusDir, calls: () => calls, updates: counted };
+    };
+
+    test("all three need the admin key", async () => {
+      const { server } = await start();
+      try {
+        for (const [method, url] of [
+          ["GET", "/admin/api/updates"],
+          ["POST", "/admin/api/updates/check"],
+          ["POST", "/admin/api/updates/install"],
+        ] as const) {
+          assert.equal((await server.call(method, url)).status, 401, `${method} ${url} with nothing`);
+          assert.equal(
+            (await server.call(method, url, { key: ACCESS_KEY, headers: { Authorization: `Bearer ${ACCESS_KEY}` } })).status,
+            401,
+            `${method} ${url} with the access key`
+          );
+        }
+      } finally {
+        await server.close();
+      }
+    });
+
+    test("GET checks in the background and answers the info", async () => {
+      const { server, calls } = await start();
+      try {
+        const res = await server.call("GET", "/admin/api/updates", { admin: ADMIN_KEY });
+        assert.equal(res.status, 200);
+        assert.equal(res.body.enabled, true);
+        assert.equal(res.body.current, "1.0.0");
+        assert.equal(res.body.installable, true);
+        assert.equal(res.body.status, null);
+        await settle();
+        assert.equal(calls(), 1);
+      } finally {
+        await server.close();
+      }
+    });
+
+    test("two checks in a row ask GitHub once", async () => {
+      const { server, calls } = await start();
+      try {
+        const first = await server.call("POST", "/admin/api/updates/check", { admin: ADMIN_KEY });
+        assert.equal(first.status, 200);
+        assert.equal(first.body.latest, "1.2.0");
+        const second = await server.call("POST", "/admin/api/updates/check", { admin: ADMIN_KEY });
+        assert.equal(second.status, 200);
+        assert.equal(calls(), 1);
+      } finally {
+        await server.close();
+      }
+    });
+
+    test("a check a minute old is allowed again", async () => {
+      let time = NOW;
+      let calls = 0;
+      const u = new Updates({
+        current: "1.0.0",
+        fetchReleases: async () => (calls++, RELEASES),
+        enabled: true,
+        requestDir: null,
+        statusDir: null,
+        sqlite: true,
+        now: () => time,
+      });
+      const server = await startServer({}, undefined, { updates: u });
+      try {
+        await server.call("POST", "/admin/api/updates/check", { admin: ADMIN_KEY });
+        time += 59_000;
+        await server.call("POST", "/admin/api/updates/check", { admin: ADMIN_KEY });
+        assert.equal(calls, 1);
+        time += 1_000;
+        await server.call("POST", "/admin/api/updates/check", { admin: ADMIN_KEY });
+        assert.equal(calls, 2);
+      } finally {
+        await server.close();
+      }
+    });
+
+    test("install: 202 with the info, and the request left for the updater", async () => {
+      const { server, requestDir, updates: u } = await start();
+      try {
+        await u.check();
+        const res = await server.call("POST", "/admin/api/updates/install", { admin: ADMIN_KEY, body: { version: "1.2.0" } });
+        assert.equal(res.status, 202);
+        assert.equal(res.body.installable, true);
+        assert.ok("status" in res.body);
+        assert.deepEqual(fs.readdirSync(requestDir!), ["request.json"]);
+      } finally {
+        await server.close();
+      }
+    });
+
+    test("install: a body that isn't { version: string } is a 4xx, never a 500", async () => {
+      const { server, requestDir, updates: u } = await start();
+      try {
+        await u.check();
+        const post = (body: unknown) => server.call("POST", "/admin/api/updates/install", { admin: ADMIN_KEY, body });
+        for (const body of [{ version: 5 }, { version: null }, {}, [], '"text"', 5, null, { version: ["1.2.0"] }]) {
+          const res = await post(body);
+          assert.equal(res.status, 409, JSON.stringify(body));
+          assert.equal(res.body.error, "not_available", JSON.stringify(body));
+        }
+        assert.equal((await post(undefined)).status, 409);
+        assert.equal((await post("{not json")).status, 400);
+        assert.deepEqual(fs.readdirSync(requestDir!), []);
+      } finally {
+        await server.close();
+      }
+    });
+
+    test("install: 501 when it can't be installed, 409 while the updater works", async () => {
+      const off = await start({ requestDir: null, statusDir: null });
+      try {
+        await off.updates.check();
+        const res = await off.server.call("POST", "/admin/api/updates/install", {
+          admin: ADMIN_KEY,
+          body: { version: "1.2.0" },
+        });
+        assert.equal(res.status, 501);
+        assert.equal(res.body.error, "not_installable");
+      } finally {
+        await off.server.close();
+      }
+      const busy = await start();
+      try {
+        await busy.updates.check();
+        writeStatus(busy.statusDir!, { ...done, state: "downloading", at: Date.now(), verified: null });
+        const res = await busy.server.call("POST", "/admin/api/updates/install", {
+          admin: ADMIN_KEY,
+          body: { version: "1.2.0" },
+        });
+        assert.equal(res.status, 409);
+        assert.equal(res.body.error, "in_progress");
+      } finally {
+        await busy.server.close();
+      }
+    });
+
+    test("without an Updates object the routes say it is off", async () => {
+      const server = await startServer();
+      try {
+        const info = await server.call("GET", "/admin/api/updates", { admin: ADMIN_KEY });
+        assert.equal(info.status, 200);
+        assert.equal(info.body.enabled, false);
+        assert.equal(info.body.installable, false);
+        assert.equal(info.body.status, null);
+        assert.equal((await server.call("POST", "/admin/api/updates/check", { admin: ADMIN_KEY })).body.enabled, false);
+        const install = await server.call("POST", "/admin/api/updates/install", {
+          admin: ADMIN_KEY,
+          body: { version: "1.2.0" },
+        });
+        assert.equal(install.status, 501);
+      } finally {
+        await server.close();
+      }
+    });
   });
 });

@@ -96,6 +96,7 @@ export const createApp = (options: AppOptions): App => {
         instance: options.instance,
         startedAt,
         limits: { maxDevices: config.maxDevices, maxNoteBytes: config.maxNoteBytes, maxBodyBytes: config.maxBodyBytes },
+        updates: options.updates,
       }),
     ],
     maxBodyBytes: config.maxBodyBytes,

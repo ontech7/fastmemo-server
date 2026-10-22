@@ -1,4 +1,9 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+
 import { log } from "./log.ts";
+import { HttpError } from "./model.ts";
 
 /*
  * The release check: asks GitHub which versions exist, and tells the dashboard (and /v1/info) when a newer one is out and
@@ -15,6 +20,9 @@ const FETCH_TIMEOUT = 10_000;
 const MAX_RELEASES = 30;
 const MAX_NOTES = 8000;
 const MAX_ERROR = 200;
+const MAX_STATUS_BYTES = 4096;
+/** An updater killed mid-way never writes a final state: past this it is not coming back. */
+const STALE_STATUS = 60 * 60 * 1000;
 
 /** Both versions must be strict. Returns -1, 0 or 1. */
 export const compareVersions = (a: string, b: string): number => {
@@ -78,6 +86,52 @@ export const githubReleases = (repo: string, userAgent: string, api = "https://a
   };
 };
 
+/** What the host updater writes to status.json (Tasks 7-8 write exactly these). `refused` is a policy refusal, final. */
+export const UPDATE_STATES = [
+  "queued",
+  "checking",
+  "downloading",
+  "verifying",
+  "backing_up",
+  "restarting",
+  "done",
+  "failed",
+  "rolled_back",
+  "refused",
+] as const;
+export type UpdateState = (typeof UPDATE_STATES)[number];
+export const FINAL_STATES: readonly UpdateState[] = ["done", "failed", "rolled_back", "refused"];
+
+export interface UpdateStatus {
+  state: UpdateState;
+  version: string;
+  message: string | null;
+  /** Milliseconds. */
+  at: number;
+  /** Whether the image's provenance was verified; null when it wasn't looked at. */
+  verified: boolean | null;
+}
+
+const isDirectory = (dir: string): boolean => {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+/** The status file's content if it is what the updater writes, else null (the file is not ours to trust). */
+const parseStatus = (value: unknown): UpdateStatus | null => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const { state, version, message, at, verified } = value as Record<string, unknown>;
+  if (!UPDATE_STATES.includes(state as UpdateState)) return null;
+  if (typeof version !== "string" || !VERSION.test(version)) return null;
+  if (message !== undefined && message !== null && (typeof message !== "string" || message.length > 500)) return null;
+  if (typeof at !== "number" || !Number.isFinite(at)) return null;
+  if (verified !== undefined && verified !== null && typeof verified !== "boolean") return null;
+  return { state: state as UpdateState, version, message: message ?? null, at, verified: verified ?? null };
+};
+
 export interface UpdateSummary {
   latest: string;
   security: boolean;
@@ -93,6 +147,11 @@ export interface UpdateInfo {
   releases: Release[];
   checkedAt: number | null;
   error: string | null;
+  /** Both directories are set and exist, and the database is SQLite: the updater can be asked. */
+  installable: boolean;
+  /** The latest release has the running version's major: only those are installed with a click. */
+  sameMajor: boolean;
+  status: UpdateStatus | null;
 }
 
 export interface UpdatesOptions {
@@ -121,6 +180,11 @@ export class Updates {
   constructor(options: UpdatesOptions) {
     this.options = options;
     this.now = options.now ?? Date.now;
+  }
+
+  /** Milliseconds since a time from `info().checkedAt`, by the same clock. */
+  elapsedSince(time: number): number {
+    return this.now() - time;
   }
 
   /** Never rejects. Callers that arrive while a check runs share it. */
@@ -172,16 +236,80 @@ export class Updates {
     return { latest: latest.version, security: pending.some((release) => release.security), url: latest.url };
   }
 
+  get installable(): boolean {
+    const { requestDir, statusDir, sqlite } = this.options;
+    return sqlite && !!requestDir && !!statusDir && isDirectory(requestDir) && isDirectory(statusDir);
+  }
+
+  /** The updater's progress, or null when there is none or the file isn't what the updater writes. */
+  status(): UpdateStatus | null {
+    const { statusDir } = this.options;
+    if (!statusDir) return null;
+    try {
+      // The directory is the updater's; a symlink there could point anywhere, and a FIFO would hang the open.
+      const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
+      const fd = fs.openSync(path.join(statusDir, "status.json"), flags);
+      try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile() || stat.size > MAX_STATUS_BYTES) return null;
+        const status = parseStatus(JSON.parse(fs.readFileSync(fd, "utf8")));
+        if (status && !FINAL_STATES.includes(status.state) && this.now() - status.at > STALE_STATUS) {
+          return { ...status, state: "failed", message: "the updater stopped without finishing: check its log" };
+        }
+        return status;
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  /** Asks the updater on the host for the latest release. It re-checks everything; this only says which one is wanted. */
+  requestInstall(version: string): void {
+    if (!this.installable) throw new HttpError(501, "not_installable", "This setup can't be updated from the dashboard");
+    const latest = this.pending()[0];
+    if (typeof version !== "string" || !VERSION.test(version) || latest?.version !== version) {
+      throw new HttpError(409, "not_available", "That version isn't the latest release");
+    }
+    if (!this.sameMajor(version)) throw new HttpError(409, "new_major", "A new major version is updated by hand");
+    const status = this.status();
+    if (status && !FINAL_STATES.includes(status.state)) {
+      throw new HttpError(409, "in_progress", "An update is already running");
+    }
+
+    const { requestDir } = this.options;
+    const temporary = path.join(requestDir!, `.request-${crypto.randomBytes(8).toString("hex")}`);
+    try {
+      fs.writeFileSync(temporary, JSON.stringify({ version, requestedAt: this.now() }), { flag: "wx", mode: 0o640 });
+      fs.renameSync(temporary, path.join(requestDir!, "request.json"));
+    } catch (error) {
+      fs.rmSync(temporary, { force: true });
+      log.error("could not leave the update request", { error });
+      throw new HttpError(500, "server_error", "Could not leave the request for the updater");
+    }
+  }
+
+  private sameMajor(version: string | null): boolean {
+    return (
+      version !== null && VERSION.test(this.options.current) && version.split(".")[0] === this.options.current.split(".")[0]
+    );
+  }
+
   info(): UpdateInfo {
     const releases = this.pending();
+    const latest = releases[0]?.version ?? null;
     return {
       enabled: this.options.enabled,
       current: this.options.current,
-      latest: releases[0]?.version ?? null,
+      latest,
       security: releases.some((release) => release.security),
       releases,
       checkedAt: this.checkedAt,
       error: this.error,
+      installable: this.installable,
+      sameMajor: this.sameMajor(latest),
+      status: this.status(),
     };
   }
 
