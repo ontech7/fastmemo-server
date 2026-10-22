@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { after, afterEach, before, beforeEach, describe, test } from "node:test";
@@ -82,9 +82,12 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
   let server: http.Server;
   let api = "";
   const releases = new Map<string, { draft?: boolean; prerelease?: boolean }>();
+  /** When set, every answer of the fake GitHub has this status (a rate limit, an outage). */
+  let githubStatus: number | null = null;
 
   before(async () => {
     server = http.createServer((request, response) => {
+      if (githubStatus) return response.writeHead(githubStatus).end('{"message":"API rate limit exceeded"}');
       const tag = /^\/repos\/ontech7\/fastmemo-server\/releases\/tags\/v([\d.]+)$/.exec(request.url ?? "")?.[1];
       const release = tag ? releases.get(tag) : undefined;
       if (!tag || !release) return response.writeHead(404).end("{}");
@@ -102,6 +105,7 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
 
   beforeEach(() => {
     releases.clear();
+    githubStatus = null;
     releases.set("1.2.0", {});
     releases.set("2.0.0", {});
     root = fs.mkdtempSync(path.join(os.tmpdir(), "fastmemo-updater-"));
@@ -403,6 +407,64 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
       assert.equal(status().state, "refused", JSON.stringify(mounts));
       assert.match(status().message, /\/data/);
     }
+    assert.equal(pulled(), false);
+  });
+
+  test("fails when GitHub refuses to answer or answers garbage", async () => {
+    for (const code of [403, 429, 500]) {
+      githubStatus = code;
+      request({ version: "1.2.0" });
+      assert.equal((await runUpdater()).code, 0);
+      assert.deepEqual([status().state, status().message], ["failed", "GitHub could not be reached"], String(code));
+    }
+    githubStatus = null;
+
+    // Not HTTP at all: http.client raises its own errors, which must end the same way.
+    const sockets = new Set<net.Socket>();
+    const garbage = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.end("not http\r\n\r\n");
+    });
+    await new Promise<void>((resolve) => garbage.listen(0, "127.0.0.1", resolve));
+    try {
+      writeConfig({ GITHUB_API: `http://127.0.0.1:${(garbage.address() as AddressInfo).port}` });
+      request({ version: "1.2.0" });
+      const result = await runUpdater();
+      assert.equal(result.code, 0);
+      assert.equal(result.stderr, "");
+      assert.deepEqual([status().state, status().message], ["failed", "GitHub could not be reached"]);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => garbage.close(() => resolve()));
+    }
+    assert.equal(pulled(), false);
+  });
+
+  test("fails cleanly when docker can't be run", async () => {
+    fs.chmodSync(path.join(dirs.bin, "docker"), 0o644);
+    request({ version: "1.2.0" });
+    const result = await runUpdater();
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    assert.deepEqual([status().state, status().message], ["failed", "docker could not be run"]);
+
+    fs.rmSync(path.join(dirs.bin, "docker"));
+    request({ version: "1.2.0" });
+    assert.equal((await runUpdater()).code, 0);
+    assert.deepEqual([status().state, status().message], ["failed", "docker could not be run"]);
+  });
+
+  test("refuses a container whose inspect output it can't make sense of", async () => {
+    setState({ env: 5 });
+    request({ version: "1.2.0" });
+    const result = await runUpdater();
+    assert.equal(result.code, 0);
+    assert.equal(result.stderr, "");
+    // No settings to read: no DATA_DIR=/data, so the database can't be found in the volume.
+    assert.deepEqual(
+      [status().state, status().message],
+      ["refused", "the database is not in the volume at /data: update it with the commands in the dashboard"]
+    );
     assert.equal(pulled(), false);
   });
 

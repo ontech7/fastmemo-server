@@ -18,6 +18,7 @@ nothing the server wrote is ever echoed back.
 """
 
 import fcntl
+import http.client
 import json
 import os
 import re
@@ -191,15 +192,19 @@ def github(config, path):
         if error.code == 404:
             raise Refused("this version is not a published release")
         raise Failed("GitHub could not be reached")
-    except (urllib.error.URLError, OSError, ValueError, RecursionError):
+    # http.client raises its own errors on an answer that isn't HTTP, or is cut short.
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError, RecursionError):
         raise Failed("GitHub could not be reached")
 
 
 def run(config, *args, check=True, timeout=600):
     try:
-        result = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout, check=False)
-    except FileNotFoundError:
-        raise Failed("docker was not found")
+        result = subprocess.run(
+            ["docker", *args], capture_output=True, text=True, errors="replace", timeout=timeout, check=False
+        )
+    except OSError:
+        # Missing, not executable, or not a program at all.
+        raise Failed("docker could not be run")
     except subprocess.TimeoutExpired:
         raise Failed(f"docker {args[0]} did not answer in time")
     if check and result.returncode != 0:
@@ -240,7 +245,7 @@ def running_container(config):
     container = found[0] if len(found) == 1 and isinstance(found[0], dict) else {}
     settings = container.get("Config") if isinstance(container.get("Config"), dict) else {}
     env = {}
-    for entry in settings.get("Env") or []:
+    for entry in settings.get("Env") if isinstance(settings.get("Env"), list) else []:
         if isinstance(entry, str) and "=" in entry:
             key, value = entry.split("=", 1)
             env[key] = value
