@@ -36,7 +36,7 @@ test/           -> node:test suites (helpers.ts: TEST_DATABASE_URL runs them on 
 docs/           -> PROTOCOL.md (the API), DEPLOYMENT.md (setups, backups, troubleshooting), AI_SETUP.md (the install
                    runbook for AI assistants: keep it in step with the README), images/ (README screenshot)
 CHANGELOG.md, SECURITY.md -> the release notes (also the GitHub release's text), how to report a vulnerability
-.github/        -> workflows/ci.yml (SQLite, PostgreSQL, image build on every push and PR), codeql.yml, dependabot.yml;
+.github/        -> dependabot.yml; workflows/ci.yml (SQLite, PostgreSQL, image build on every push and PR), codeql.yml;
                    workflows/release.yml: a v* tag (matching package.json, with a CHANGELOG.md section) tests, builds both
                    architectures natively, publishes ghcr.io/ontech7/fastmemo-server with signed provenance, opens the release
 ```
@@ -90,7 +90,8 @@ CHANGELOG.md, SECURITY.md -> the release notes (also the GitHub release's text),
 ```sh
 npm run dev | npm start | npm test | npm run test:pg | npm run typecheck | npm run format
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build   # built from source, SQLite
-# a release: update CHANGELOG.md (a "## [1.2.3]" section), then the v* tag publishes the image and the GitHub release
+# a release: commit CHANGELOG.md first (the "## [1.2.3]" section, its date replacing "unreleased"; npm version needs a clean
+# tree), then the v* tag publishes the image and the GitHub release
 npm version 1.2.3 -m "chore: release v%s" && git push --follow-tags
 ```
 

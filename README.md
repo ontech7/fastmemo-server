@@ -278,7 +278,9 @@ docker compose pull && docker compose up -d
 With another compose file, add `-f <file>` to each command. The compose files run the newest `1.x` image. A new major version
 (2.0) means reading its notes first. Then set `FASTMEMO_IMAGE` in `.env`, for example
 `FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:2`. The database is upgraded on start. If `docker compose pull` fails, or you
-changed the code, [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#the-image) shows how to build it from source.
+changed the code, [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#the-image) shows how to build it from source. Once the updater has put
+a `FASTMEMO_IMAGE=...@sha256:...` line in `.env`, updating by hand means setting `FASTMEMO_IMAGE` to the new version (or
+clearing it) before `docker compose pull && docker compose up -d`.
 
 **With one click**, if you install the optional updater on the host: the dashboard's **Install** button does the same, safely,
 and shows its progress. It works for SQLite, for the published image, and for the same major version (a new major, PostgreSQL
@@ -292,8 +294,9 @@ again by itself:
 - its **build provenance** is verified (built by this repository's release workflow, from that version's tag) when the GitHub
   CLI and a token are on the host. Without them the update still goes ahead, and the dashboard says "Provenance not checked":
   every update says "verified" or "not checked". `VERIFY_PROVENANCE=required` makes the check mandatory;
-- the database is copied first (when there is room for it), and if the new version is not healthy within two minutes, or the run
-  is stopped half-way, the previous image and database come back. An update a power cut interrupted is undone at the next boot.
+- the database is copied first (if there isn't room for the copy, the update stops and nothing changes), and if the new version
+  is not healthy within two minutes, or the run is stopped half-way, the previous image and database come back. An update a
+  power cut interrupted is undone at the next boot.
 
 <details>
 <summary><strong>Install the updater</strong></summary>
