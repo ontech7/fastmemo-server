@@ -221,6 +221,20 @@ describe("githubReleases", () => {
     }
   });
 
+  test("finds the Security section even past the notes cap", async () => {
+    const stub = await serve(
+      200,
+      JSON.stringify([item("v1.3.0", { body: `${"x".repeat(10_000)}\n### Security\n- fixed\n${"y".repeat(10_000)}` })])
+    );
+    try {
+      const [found] = await fetchFrom(stub.api);
+      assert.equal(found?.security, true);
+      assert.equal(found?.notes.length, 8000);
+    } finally {
+      await stub.close();
+    }
+  });
+
   test("sends a user agent and nothing identifying beyond it", async () => {
     const stub = await serve(200, "[]");
     try {

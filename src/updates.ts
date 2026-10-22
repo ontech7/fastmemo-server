@@ -59,6 +59,7 @@ export const githubReleases = (repo: string, userAgent: string, api = "https://a
       if (typeof tag_name !== "string" || draft !== false || prerelease !== false) continue;
       const version = tag_name.replace(/^v/, "");
       if (!VERSION.test(version)) continue;
+      // The Security section is looked for in the whole body: Keep a Changelog puts it last, past the cap.
       const notes = typeof body === "string" ? body.slice(0, MAX_NOTES) : "";
       // A link to anywhere but the project's releases is never passed on.
       const url =
@@ -70,7 +71,7 @@ export const githubReleases = (repo: string, userAgent: string, api = "https://a
         notes,
         url,
         publishedAt: typeof published_at === "string" ? published_at : null,
-        security: hasSecuritySection(notes),
+        security: typeof body === "string" && hasSecuritySection(body),
       });
     }
     return releases;
