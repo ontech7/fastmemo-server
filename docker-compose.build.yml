@@ -1,0 +1,10 @@
+# Builds the image from the source in this folder instead of downloading the published one. Add it as a second file to the
+# one you use (any of the other docker-compose files in place of the first):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# The image gets a local name, so the updater never mistakes it for the published one.
+services:
+  fastmemo:
+    build: .
+    image: fastmemo-server:local

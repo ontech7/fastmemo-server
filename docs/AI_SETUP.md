@@ -86,8 +86,10 @@ Leave the rest as it is.
 
 ## 4. Start it and give it HTTPS
 
-The first start downloads the image `ghcr.io/ontech7/fastmemo-server`. If the download fails, Compose builds it from the cloned
-folder instead: that's expected. It takes a few minutes and prints a lot, npm warnings included; only the last lines matter.
+The first start downloads the image `ghcr.io/ontech7/fastmemo-server`. If the download fails (`denied`, `not found`), build it
+from the cloned folder instead: add `-f docker-compose.build.yml` after the compose file you use (for example
+`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`). It takes a few minutes and prints a lot, npm
+warnings included; only the last lines matter. Use the same pair of `-f` for every later command.
 
 ### Tailscale
 
@@ -205,9 +207,10 @@ Tell the person, in plain words:
 4. **The server runs while this machine is on** (and, on a Mac or PC, while Docker Desktop runs).
 5. **Backups**: the dashboard's **Download a backup** button, or the script in the [README](../README.md#backups-and-restore). A
    backup holds the titles and the device list: keep it private.
-6. **Updating**, in the `fastmemo-server` folder: `git pull`, then `docker compose pull` and `docker compose up -d`. If
-   `docker compose pull` fails (`denied`, `not found`), run `docker compose up -d --build` instead: it builds the new version
-   from the folder.
+6. **Updating**, in the `fastmemo-server` folder: `git pull`, then `docker compose pull && docker compose up -d`. If
+   `docker compose pull` fails (`denied`, `not found`), build the new version from the folder instead, with
+   `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build` (the same two files for every command after
+   it).
 
 ## If something fails
 

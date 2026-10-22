@@ -8,10 +8,14 @@
 # The app connects to https://notes.example.com. Cloudflare decrypts the traffic on its servers: see the README's HTTPS section.
 services:
   fastmemo:
-    image: ghcr.io/ontech7/fastmemo-server:latest # downloaded, or built from this folder (see docker-compose.yml)
-    build: .
+    image: ${FASTMEMO_IMAGE:-ghcr.io/ontech7/fastmemo-server:1.0} # the published image (docker-compose.build.yml builds this folder instead)
     container_name: fastmemo-server
     restart: unless-stopped
+    # Locked down: the server only writes in /data (the volume) and /tmp.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=16m"]
     environment:
       # The server's settings from .env, by name: the other services' secrets there (a tunnel token, an auth key) stay
       # out of this container.

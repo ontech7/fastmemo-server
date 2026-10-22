@@ -262,12 +262,13 @@ volume is `<folder name>_fastmemo-data` (`docker volume ls` lists it). For Postg
 
 ```sh
 git pull
-docker compose pull
-docker compose up -d
+docker compose pull && docker compose up -d
 ```
 
-With another compose file, add `-f <file>` to each command. If `docker compose pull` fails, `docker compose up -d --build`
-builds the new version from source instead. The database is upgraded on start.
+With another compose file, add `-f <file>` to each command. The compose files run the newest `1.0.x` image. For a new version
+(1.1, 2.0...), set `FASTMEMO_IMAGE` in `.env`, for example `FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:1.1`. The database is
+upgraded on start. If `docker compose pull` fails, or you changed the code, [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#the-image)
+shows how to build it from source.
 
 ## Security
 

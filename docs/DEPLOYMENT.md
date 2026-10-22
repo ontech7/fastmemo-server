@@ -12,8 +12,20 @@ silicon). Tags:
 - `1.0`: the newest `1.0.x`.
 - `1.0.0`: exactly that release.
 
-The compose files use `latest` and also know how to build the image: when Docker can't download it, it builds it from the cloned
-folder. `docker compose up -d --build` always builds from source.
+The compose files run `1.0` (the newest `1.0.x`), or whatever `FASTMEMO_IMAGE` says in `.env`: a tag such as
+`ghcr.io/ontech7/fastmemo-server:1.1`, or one exact version. To update by hand: `docker compose pull && docker compose up -d`.
+The server runs read-only, without capabilities and without new privileges, and writes only in `/data` and `/tmp`.
+
+To build the image from the cloned folder instead (a failed download, or code you changed), add `docker-compose.build.yml` as a
+second file; it names the image `fastmemo-server:local`:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+With another compose file, put it in place of the first one (for example
+`-f docker-compose.caddy.yml -f docker-compose.build.yml`), and use the same pair of `-f` for `logs`, `down`, and the next
+build.
 
 To run the image without cloning the repository:
 
@@ -130,7 +142,7 @@ Coolify gets the HTTPS certificate and generates the keys on the first deploy. F
 `MAX_NOTE_MB` and `LOG_LEVEL` can be set there too.
 
 Coolify builds the image from the repository. To run the published image instead, replace `build: .` with
-`image: ghcr.io/ontech7/fastmemo-server:latest` in `docker-compose.coolify.yml`.
+`image: ghcr.io/ontech7/fastmemo-server:1.0` in `docker-compose.coolify.yml`.
 
 ## PostgreSQL
 
