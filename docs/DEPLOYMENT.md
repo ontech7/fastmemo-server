@@ -38,12 +38,16 @@ volume is then `fastmemo-data`, not `fastmemo-server_fastmemo-data` (keep that i
   ```
 
 - The container starts again on its own after a reboot or a power cut (`restart: unless-stopped`).
-- Tailscale is the simplest way to give it an HTTPS address.
+- Tailscale is the simplest way to reach it from anywhere, encrypted: over HTTPS, or plain HTTP inside the tailnet.
 
 ## Tailscale
 
 - `tailscale serve --bg 8787` serves `https://<machine>.<your-tailnet>.ts.net` and forwards to port 8787 on the same machine. If
   it asks to enable HTTPS certificates or MagicDNS, follow the link it prints: it's one click in the Tailscale admin.
+- `tailscale serve --bg --tcp=8787 tcp://127.0.0.1:8787` serves `http://<machine>.<your-tailnet>.ts.net:8787` instead, with no
+  certificate. Tailscale encrypts the traffic all the same, and Android and the desktop apps connect without a warning; the web
+  app needs HTTPS. Choose it to keep the machine's name out of the public Certificate Transparency logs, where every HTTPS
+  certificate is listed. A TCP forward passes no `X-Forwarded-For`: every request seems to come from the same local address.
 - `TRUST_PROXY=true` lets the server see which device sent each request, for the logs and the wrong-key limit. Without it, every
   request seems to come from the same local address. The server takes the address from the proxy's `X-Forwarded-For` only on a
   connection from a private address (where a proxy connects from).
@@ -65,7 +69,9 @@ computer, no published port. The dashboard and the API are only at the `ts.net` 
   `tailscale-state` volume, across restarts and updates.
 - **The address:** `https://fastmemo.<your-tailnet>.ts.net`. `TS_HOSTNAME` changes `fastmemo`. If the name is taken, Tailscale
   adds a number (`fastmemo-1`): the **Machines** page shows the real one.
-- **What's served** is in `tailscale/serve.json`: port 443 forwards to the server at `127.0.0.1:8787`.
+- **What's served** is in `tailscale/serve.json`: port 443 forwards to the server at `127.0.0.1:8787`. For plain HTTP with no
+  certificate (see above), replace its content with `{"TCP": {"8787": {"TCPForward": "127.0.0.1:8787"}}}`: the address is
+  `http://fastmemo.<your-tailnet>.ts.net:8787`, and HTTPS Certificates can stay off.
 
 ### Tailscale Funnel
 
