@@ -323,12 +323,13 @@ doesn't apply to Coolify (the dashboard still shows the update).
 
 ## Without Docker
 
-Node.js 22.18 or newer runs the TypeScript sources directly. In the cloned folder:
+Node.js 24 or newer runs the TypeScript sources directly. On Node.js 20 or 22, install Node.js 24 first (for example
+`nvm install 24`). In the cloned folder:
 
 ```sh
 npm ci --omit=dev
 cp .env.example .env
-node --env-file=.env --disable-warning=ExperimentalWarning src/main.ts
+node --env-file=.env src/main.ts
 ```
 
 - `npm ci --omit=dev` installs the one dependency (`pg`). `--env-file=.env` reads the settings; without it, set them in the

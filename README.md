@@ -207,8 +207,8 @@ show (note titles, device credentials); the notes' content stays end-to-end encr
   `DATABASE_URL` at your own PostgreSQL. SQLite is plenty for a person or a family.
 - **Coolify**: deploy this repository with the **Docker Compose** build pack and `/docker-compose.coolify.yml`, on a domain like
   `https://notes.example.com:8787`. Coolify handles HTTPS and generates the keys. Update it with **Redeploy**.
-- **Without Docker**, with Node.js 22.18 or newer: `npm ci --omit=dev`, then
-  `node --env-file=.env --disable-warning=ExperimentalWarning src/main.ts`.
+- **Without Docker**, with Node.js 24 or newer: `npm ci --omit=dev`, then `node --env-file=.env src/main.ts`. On Node.js 20 or
+  22, install Node.js 24 first (for example `nvm install 24`).
 
 Step by step, and troubleshooting: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
@@ -397,7 +397,7 @@ tests pass:
 
 ## Development
 
-The API is in [docs/PROTOCOL.md](docs/PROTOCOL.md). Node.js 22.18 or newer runs the TypeScript sources directly, with no build.
+The API is in [docs/PROTOCOL.md](docs/PROTOCOL.md). Node.js 24 or newer runs the TypeScript sources directly, with no build.
 
 ```sh
 npm install

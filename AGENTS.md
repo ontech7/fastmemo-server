@@ -7,7 +7,7 @@
 ## Project Summary
 
 The self-hosted sync server for FastMemo: devices sync their (end-to-end encrypted) notes through it with a change feed and long
-polling, plus an ops dashboard. Node.js ≥ 22.18 running the TypeScript sources directly (type stripping, no build), `node:http`
+polling, plus an ops dashboard. Node.js ≥ 24 running the TypeScript sources directly (type stripping, no build), `node:http`
 with no framework, SQLite (`node:sqlite`) by default or PostgreSQL (`pg`). One Docker image.
 
 The app side is `fastmemo-app/src/libs/cloud/serverBackend.ts` (the `CloudBackend` that speaks this API). The API is documented

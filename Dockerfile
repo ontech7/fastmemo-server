@@ -26,4 +26,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/v1/health" || exit 1
 
 # Node handles SIGTERM itself: `docker stop` lets it finish the requests in flight and close the database cleanly.
-CMD ["node", "--disable-warning=ExperimentalWarning", "src/main.ts"]
+CMD ["node", "src/main.ts"]
