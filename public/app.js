@@ -442,12 +442,16 @@ const renderUpdates = (u) => {
   commands.hidden = !showCommands;
   if (showCommands) {
     const major = u.latest.split(".")[0];
+    // The image line is for .env (docker compose reads it from there): pasted in a shell it would change nothing.
     $("update-commands-text").textContent = u.sameMajor
-      ? "This setup can't be updated from here. Run, in the folder with the docker-compose.yml:"
-      : "This is a new major version: read the notes above first. Then set the image in .env and run, in the folder with the docker-compose.yml:";
-    $("update-commands-pre").textContent = u.sameMajor
-      ? "docker compose pull && docker compose up -d"
-      : `FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:${major}\ndocker compose pull && docker compose up -d`;
+      ? "This setup can't be updated from here."
+      : "This is a new major version: read the notes above first. Then put this line in the .env file (replacing any FASTMEMO_IMAGE line):";
+    $("update-env-pre").hidden = u.sameMajor;
+    $("update-env-pre").textContent = `FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:${major}`;
+    $("update-run-text").textContent = u.sameMajor
+      ? "Run, in the folder with the docker-compose.yml:"
+      : "And run, in the folder with the docker-compose.yml:";
+    $("update-commands-pre").textContent = "docker compose pull && docker compose up -d";
     $("update-commands-note").textContent =
       "With other compose files add -f <file> after docker compose. On Coolify: redeploy.";
   }
