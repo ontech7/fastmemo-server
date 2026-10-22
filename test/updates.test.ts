@@ -382,10 +382,31 @@ describe("the updater's status and install request", () => {
       assert.equal(u.status(), null);
     });
 
-    test("is null for a file over 4096 bytes", () => {
+    test("is null for a file over 4096 bytes, even when every field is valid", () => {
       const { u, statusDir } = installable("1.0.0", []);
-      writeStatus(statusDir!, { ...done, message: "x".repeat(5000) });
+      const file = path.join(statusDir!, "status.json");
+      const json = JSON.stringify(done);
+      fs.writeFileSync(file, json + " ".repeat(4096 - json.length));
+      assert.deepEqual(u.status(), done);
+      fs.writeFileSync(file, json + " ".repeat(4097 - json.length));
       assert.equal(u.status(), null);
+    });
+
+    test("a message over 500 characters is cut, not a reason to drop the status", () => {
+      const { u, statusDir } = installable("1.0.0", []);
+      writeStatus(statusDir!, { ...done, state: "failed", message: "x".repeat(1500) });
+      assert.deepEqual(u.status(), { ...done, state: "failed", message: "x".repeat(500) });
+    });
+
+    test("a running state dated far in the future is stale too, a few minutes of skew is not", () => {
+      const { u, statusDir } = installable("1.0.0", [], { now: () => NOW });
+      writeStatus(statusDir!, { ...done, state: "downloading", verified: null, at: NOW + 4 * 60 * 1000 });
+      assert.equal(u.status()?.state, "downloading");
+      writeStatus(statusDir!, { ...done, state: "downloading", verified: null, at: NOW + 6 * 60 * 1000 });
+      assert.equal(u.status()?.state, "failed");
+      assert.equal(u.status()?.message, "the updater stopped without finishing: check its log");
+      writeStatus(statusDir!, { ...done, at: NOW + 6 * 60 * 1000 });
+      assert.equal(u.status()?.state, "done");
     });
 
     test("returns a valid status as written", () => {
@@ -459,6 +480,18 @@ describe("the updater's status and install request", () => {
       assert.deepEqual(fs.readdirSync(requestDir!), []);
     });
 
+    test("a request the updater hasn't picked up yet blocks a second one", async () => {
+      const { u, requestDir } = installable("1.0.0", RELEASES);
+      await u.check();
+      u.requestInstall("1.2.0");
+      const first = fs.readFileSync(path.join(requestDir!, "request.json"), "utf8");
+      refused(u, "1.2.0", 409, "in_progress");
+      assert.equal(fs.readFileSync(path.join(requestDir!, "request.json"), "utf8"), first);
+      assert.deepEqual(fs.readdirSync(requestDir!), ["request.json"]);
+      fs.rmSync(path.join(requestDir!, "request.json"));
+      u.requestInstall("1.2.0");
+    });
+
     test("another major is never installed with a click", async () => {
       const { u } = installable("1.0.0", [release("2.0.0")]);
       await u.check();
@@ -474,6 +507,7 @@ describe("the updater's status and install request", () => {
       for (const state of ["done", "failed", "rolled_back", "refused"]) {
         writeStatus(statusDir!, { ...done, state });
         u.requestInstall("1.2.0");
+        fs.rmSync(path.join(requestDir!, "request.json"));
       }
     });
 

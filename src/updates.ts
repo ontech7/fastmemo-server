@@ -23,6 +23,9 @@ const MAX_ERROR = 200;
 const MAX_STATUS_BYTES = 4096;
 /** An updater killed mid-way never writes a final state: past this it is not coming back. */
 const STALE_STATUS = 60 * 60 * 1000;
+/** A status from further ahead than this is a clock gone wrong: it must not block installs for good. */
+const MAX_CLOCK_SKEW = 5 * 60 * 1000;
+const MAX_MESSAGE = 500;
 
 /** Both versions must be strict. Returns -1, 0 or 1. */
 export const compareVersions = (a: string, b: string): number => {
@@ -126,10 +129,16 @@ const parseStatus = (value: unknown): UpdateStatus | null => {
   const { state, version, message, at, verified } = value as Record<string, unknown>;
   if (!UPDATE_STATES.includes(state as UpdateState)) return null;
   if (typeof version !== "string" || !VERSION.test(version)) return null;
-  if (message !== undefined && message !== null && (typeof message !== "string" || message.length > 500)) return null;
+  if (message !== undefined && message !== null && typeof message !== "string") return null;
   if (typeof at !== "number" || !Number.isFinite(at)) return null;
   if (verified !== undefined && verified !== null && typeof verified !== "boolean") return null;
-  return { state: state as UpdateState, version, message: message ?? null, at, verified: verified ?? null };
+  return {
+    state: state as UpdateState,
+    version,
+    message: message?.slice(0, MAX_MESSAGE) ?? null,
+    at,
+    verified: verified ?? null,
+  };
 };
 
 export interface UpdateSummary {
@@ -253,7 +262,8 @@ export class Updates {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.size > MAX_STATUS_BYTES) return null;
         const status = parseStatus(JSON.parse(fs.readFileSync(fd, "utf8")));
-        if (status && !FINAL_STATES.includes(status.state) && this.now() - status.at > STALE_STATUS) {
+        const age = status ? this.now() - status.at : 0;
+        if (status && !FINAL_STATES.includes(status.state) && (age > STALE_STATUS || age < -MAX_CLOCK_SKEW)) {
           return { ...status, state: "failed", message: "the updater stopped without finishing: check its log" };
         }
         return status;
@@ -279,6 +289,10 @@ export class Updates {
     }
 
     const { requestDir } = this.options;
+    // The updater removes request.json when it picks it up: while it is there, the same install is already queued.
+    if (fs.existsSync(path.join(requestDir!, "request.json"))) {
+      throw new HttpError(409, "in_progress", "An update is already waiting for the updater");
+    }
     const temporary = path.join(requestDir!, `.request-${crypto.randomBytes(8).toString("hex")}`);
     try {
       fs.writeFileSync(temporary, JSON.stringify({ version, requestedAt: this.now() }), { flag: "wx", mode: 0o640 });
