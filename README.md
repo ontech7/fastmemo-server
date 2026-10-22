@@ -266,8 +266,8 @@ docker compose pull && docker compose up -d
 ```
 
 With another compose file, add `-f <file>` to each command. The compose files run the newest `1.x` image. A new major version
-(2.0) means reading its notes first, then setting `FASTMEMO_IMAGE` in `.env` (for example
-`FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:2`). The database is upgraded on start. If `docker compose pull` fails, or you
+(2.0) means reading its notes first. Then set `FASTMEMO_IMAGE` in `.env`, for example
+`FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:2`. The database is upgraded on start. If `docker compose pull` fails, or you
 changed the code, [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#the-image) shows how to build it from source.
 
 ## Security

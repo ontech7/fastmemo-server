@@ -145,7 +145,7 @@ Coolify gets the HTTPS certificate and generates the keys on the first deploy. F
 `MAX_NOTE_MB` and `LOG_LEVEL` can be set there too.
 
 Coolify builds the image from the repository. To run the published image instead, replace `build: .` with
-`image: ghcr.io/ontech7/fastmemo-server:1.0` in `docker-compose.coolify.yml`.
+`image: ghcr.io/ontech7/fastmemo-server:1` in `docker-compose.coolify.yml`.
 
 ## PostgreSQL
 
