@@ -8,7 +8,7 @@
 # The app connects to https://notes.example.com. Cloudflare decrypts the traffic on its servers: see the README's HTTPS section.
 services:
   fastmemo:
-    image: ${FASTMEMO_IMAGE:-ghcr.io/ontech7/fastmemo-server:1.0} # the published image (docker-compose.build.yml builds this folder instead)
+    image: ${FASTMEMO_IMAGE:-ghcr.io/ontech7/fastmemo-server:1} # the published image (docker-compose.build.yml builds this folder instead)
     container_name: fastmemo-server
     restart: unless-stopped
     # Locked down: the server only writes in /data (the volume) and /tmp.

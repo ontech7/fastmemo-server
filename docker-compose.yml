@@ -10,7 +10,7 @@
 # To build the source in this folder instead: docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 services:
   fastmemo:
-    image: ${FASTMEMO_IMAGE:-ghcr.io/ontech7/fastmemo-server:1.0}
+    image: ${FASTMEMO_IMAGE:-ghcr.io/ontech7/fastmemo-server:1}
     container_name: fastmemo-server
     restart: unless-stopped
     # Locked down: the server only writes in /data (the volume) and /tmp.

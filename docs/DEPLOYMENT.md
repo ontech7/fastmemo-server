@@ -9,12 +9,14 @@ works.
 silicon). Tags:
 
 - `latest`: the newest release.
+- `1`: the newest `1.x`.
 - `1.0`: the newest `1.0.x`.
 - `1.0.0`: exactly that release.
 
-The compose files run `1.0` (the newest `1.0.x`), or whatever `FASTMEMO_IMAGE` says in `.env`: a tag such as
-`ghcr.io/ontech7/fastmemo-server:1.1`, or one exact version. To update by hand: `docker compose pull && docker compose up -d`.
-The server runs read-only, without capabilities and without new privileges, and writes only in `/data` and `/tmp`.
+The compose files run `1` (the newest `1.x`), or whatever `FASTMEMO_IMAGE` says in `.env`: one exact version, say. To update by
+hand: `docker compose pull && docker compose up -d`. A new major version (2.0) means reading its notes, then setting
+`FASTMEMO_IMAGE`. The server runs read-only, without capabilities and without new privileges, and writes only in `/data` and
+`/tmp`.
 
 To build the image from the cloned folder instead (a failed download, or code you changed), add `docker-compose.build.yml` as a
 second file; it names the image `fastmemo-server:local`:
@@ -31,7 +33,8 @@ To run the image without cloning the repository:
 
 ```sh
 docker run -d --name fastmemo-server --restart unless-stopped -p 8787:8787 -v fastmemo-data:/data \
-  --env-file .env ghcr.io/ontech7/fastmemo-server:latest
+  --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /tmp:size=16m \
+  --env-file .env ghcr.io/ontech7/fastmemo-server:1
 docker logs fastmemo-server
 ```
 

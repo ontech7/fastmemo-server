@@ -4,7 +4,7 @@
 # domain in Coolify as https://notes.example.com:8787 (the :8787 is the container's port, people still use 443).
 # Coolify generates both keys on the first deploy: find them under Environment Variables.
 # Coolify builds the image from this repository. To run the published one instead, replace `build: .` with
-# `image: ghcr.io/ontech7/fastmemo-server:1.0`.
+# `image: ghcr.io/ontech7/fastmemo-server:1`.
 services:
   fastmemo:
     build: .

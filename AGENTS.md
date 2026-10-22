@@ -73,7 +73,7 @@ docs/           -> PROTOCOL.md (the API), DEPLOYMENT.md (setups, backups, troubl
 
 ```sh
 npm run dev | npm start | npm test | npm run test:pg | npm run typecheck | npm run format
-docker compose up -d --build   # the image, SQLite
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build   # built from source, SQLite
 npm version 1.2.3 -m "chore: release v%s" && git push --follow-tags   # a release: the v* tag publishes the image
 ```
 

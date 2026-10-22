@@ -25,7 +25,7 @@ services:
       - ./tailscale:/config:ro # the folder, not the file: Tailscale sees changes to serve.json
 
   fastmemo:
-    image: ${FASTMEMO_IMAGE:-ghcr.io/ontech7/fastmemo-server:1.0} # the published image (docker-compose.build.yml builds this folder instead)
+    image: ${FASTMEMO_IMAGE:-ghcr.io/ontech7/fastmemo-server:1} # the published image (docker-compose.build.yml builds this folder instead)
     container_name: fastmemo-server
     restart: unless-stopped
     # Locked down: the server only writes in /data (the volume) and /tmp.
