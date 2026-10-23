@@ -7,18 +7,26 @@
 **Your own sync server for FastMemo: end-to-end encrypted notes, live sync between your devices, and a dashboard. One Docker
 container.**
 
-![Docker](https://badgen.net/badge/Docker/amd64%20%C2%B7%20arm64/blue)
-![Database](https://badgen.net/badge/Database/SQLite%20%C2%B7%20PostgreSQL/blue)
-![Protocol](https://badgen.net/badge/Protocol/v1/blue) ![License](https://badgen.net/badge/License/AGPL-3.0/grey)
+[![CI](https://github.com/ontech7/fastmemo-server/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ontech7/fastmemo-server/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/ontech7/fastmemo-server/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/ontech7/fastmemo-server/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/ontech7/fastmemo-server?label=release&color=4f6bed)](CHANGELOG.md)
+![Tests](https://img.shields.io/badge/tests-SQLite%20%7C%20PostgreSQL-brightgreen)
+![Provenance](https://img.shields.io/badge/releases-signed%20provenance-brightgreen) <br />
+![Node](https://img.shields.io/badge/node-%E2%89%A524-339933?logo=node.js&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
+[![Image](https://img.shields.io/badge/ghcr.io-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white)](https://github.com/ontech7/fastmemo-server/pkgs/container/fastmemo-server)
+![Database](https://img.shields.io/badge/database-SQLite%20%7C%20PostgreSQL-003B57?logo=sqlite&logoColor=white)
+![Protocol](https://img.shields.io/badge/protocol-v1-blue)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
-[Quick start](#quick-start) | [Deployment guide](docs/DEPLOYMENT.md) | [Protocol](docs/PROTOCOL.md) |
-[Report Bug](https://github.com/ontech7/fastmemo-server/issues)
+[Quick start](#quick-start) · [Updates](#updates) · [Security](#security) · [Deployment guide](docs/DEPLOYMENT.md) ·
+[Protocol](docs/PROTOCOL.md) · [Changelog](CHANGELOG.md) · [Report Bug](https://github.com/ontech7/fastmemo-server/issues)
 
 ---
 
 If you find this project useful, consider [buying me a coffee](https://www.buymeacoffee.com/ontech7)! ☕
 
-<img width="1280" alt="The FastMemo Server dashboard: notes, devices, operations per day" src="docs/images/dashboard.png" />
+<img width="1280" alt="The FastMemo Server dashboard: notes, updates, operations per day, devices" src="docs/images/dashboard.png" />
 
 </div>
 
