@@ -1,6 +1,7 @@
 import type { Route } from "./http.ts";
 import { HttpError, isKey, isObject } from "./model.ts";
 import type { Service } from "./service.ts";
+import type { UpdateSummary } from "./updates.ts";
 
 /*
  * The app's API (the app's `ServerBackend` speaks it). Version 1, under /v1.
@@ -18,6 +19,8 @@ const MAX_WAIT_S = 50;
 export interface ServerInfo {
   version: string;
   instance: string;
+  /** A newer release, when the check found one. */
+  update?: () => UpdateSummary | null;
 }
 
 const self = (req: { params: string[]; device: string }) => {
@@ -38,16 +41,21 @@ export const apiRoutes = (service: Service, info: ServerInfo): Route[] => [
     method: "GET",
     pattern: /^\/v1\/info$/,
     auth: "key",
-    handler: async () => ({
-      json: {
-        server: "fastmemo-server",
-        version: info.version,
-        protocol: PROTOCOL,
-        instance: info.instance,
-        maxDevices: service.maxDevices,
-        maxNoteBytes: service.maxNoteBytes,
-      },
-    }),
+    handler: async () => {
+      const update = info.update?.();
+      return {
+        json: {
+          server: "fastmemo-server",
+          version: info.version,
+          protocol: PROTOCOL,
+          instance: info.instance,
+          maxDevices: service.maxDevices,
+          maxNoteBytes: service.maxNoteBytes,
+          // Optional: absent when up to date, when the check is off, or before it ran.
+          ...(update && { update }),
+        },
+      };
+    },
   },
 
   // --- Devices ---

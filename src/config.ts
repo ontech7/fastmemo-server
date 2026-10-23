@@ -24,6 +24,11 @@ export interface Config {
   /** Behind a reverse proxy (Coolify, Traefik, nginx): the client address comes from X-Forwarded-For. */
   trustProxy: boolean;
   logLevel: LogLevel;
+  /** Asks GitHub every 6 hours whether a newer release is out. */
+  updateCheck: boolean;
+  /** Where an install request is left for the updater, and where it reports. Null: no updater. */
+  updateRequestDir: string | null;
+  updateStatusDir: string | null;
 }
 
 export class ConfigError extends Error {}
@@ -36,6 +41,14 @@ const integer = (env: NodeJS.ProcessEnv, name: string, fallback: number, min: nu
   const value = Number(raw);
   if (!Number.isInteger(value) || value < min) throw new ConfigError(`${name} must be an integer >= ${min} (got "${raw}")`);
   return value;
+};
+
+const flag = (env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean => {
+  const raw = env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  if (["on", "true", "1", "yes"].includes(raw)) return true;
+  if (["off", "false", "0", "no"].includes(raw)) return false;
+  throw new ConfigError(`${name} must be on or off (got "${env[name]?.trim()}")`);
 };
 
 const key = (env: NodeJS.ProcessEnv, name: string): string | null => {
@@ -84,5 +97,8 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     maxBodyBytes: integer(env, "MAX_BODY_MB", 64, 1) * MIB,
     trustProxy: /^(1|true|yes)$/i.test(env.TRUST_PROXY?.trim() ?? ""),
     logLevel: level,
+    updateCheck: flag(env, "UPDATE_CHECK", true),
+    updateRequestDir: env.UPDATE_REQUEST_DIR?.trim() || null,
+    updateStatusDir: env.UPDATE_STATUS_DIR?.trim() || null,
   };
 };

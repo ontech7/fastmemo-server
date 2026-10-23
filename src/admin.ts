@@ -9,6 +9,7 @@ import { HttpError } from "./model.ts";
 import type { Service } from "./service.ts";
 import { dayOf, type Stats } from "./stats.ts";
 import type { Database } from "./store/db.ts";
+import type { UpdateInfo, Updates } from "./updates.ts";
 
 /*
  * The dashboard: a static page (public/) and the API it reads, under /admin with the admin key. What the server sees and
@@ -23,7 +24,12 @@ export interface AdminContext {
   instance: string;
   startedAt: number;
   limits: { maxDevices: number; maxNoteBytes: number; maxBodyBytes: number };
+  /** Without it the update routes answer that the release check is off. */
+  updates?: Updates;
 }
+
+/** The dashboard may ask GitHub again at most this often: a leaked admin key can't be used to burn the rate limit. */
+const CHECK_THROTTLE = 60 * 1000;
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 
@@ -62,6 +68,19 @@ export const adminRoutes = (ctx: AdminContext): Route[] => {
     if (!asset) throw new HttpError(404, "not_found");
     return { body: asset.body, type: asset.type, headers: PAGE_HEADERS };
   };
+
+  const noUpdates = (): UpdateInfo => ({
+    enabled: false,
+    current: ctx.version,
+    latest: null,
+    security: false,
+    releases: [],
+    checkedAt: null,
+    error: null,
+    installable: false,
+    sameMajor: false,
+    status: null,
+  });
 
   return [
     { method: "GET", pattern: /^\/$/, auth: "none", handler: async () => page("index.html") },
@@ -138,6 +157,40 @@ export const adminRoutes = (ctx: AdminContext): Route[] => {
           type: "application/octet-stream",
           headers: { "Content-Disposition": `attachment; filename="fastmemo-${stamp}.db"` },
         };
+      },
+    },
+    {
+      method: "GET",
+      pattern: /^\/admin\/api\/updates$/,
+      auth: "admin",
+      handler: async () => {
+        ctx.updates?.maybeCheck();
+        return { json: ctx.updates?.info() ?? noUpdates() };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/admin\/api\/updates\/check$/,
+      auth: "admin",
+      handler: async () => {
+        const { updates } = ctx;
+        if (!updates) return { json: noUpdates() };
+        const { checkedAt } = updates.info();
+        if (checkedAt === null || updates.elapsedSince(checkedAt) >= CHECK_THROTTLE) await updates.check();
+        return { json: updates.info() };
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/admin\/api\/updates\/install$/,
+      auth: "admin",
+      handler: async (req) => {
+        if (!ctx.updates) throw new HttpError(501, "not_installable", "This setup can't be updated from the dashboard");
+        const body = await req.json();
+        const version = typeof body === "object" && body !== null ? (body as { version?: unknown }).version : undefined;
+        // Anything but a string is not a release: the same answer as a version that isn't the latest.
+        ctx.updates.requestInstall(typeof version === "string" ? version : "");
+        return { status: 202, json: ctx.updates.info() };
       },
     },
   ];

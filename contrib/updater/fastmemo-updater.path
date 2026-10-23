@@ -1,0 +1,9 @@
+[Unit]
+Description=fastmemo-server: watch for update requests from the dashboard
+
+[Path]
+PathExists=/var/lib/fastmemo-update/request/request.json
+Unit=fastmemo-updater.service
+
+[Install]
+WantedBy=multi-user.target

@@ -5,10 +5,14 @@
 #   docker compose -f docker-compose.postgres.yml up -d
 services:
   fastmemo:
-    image: ghcr.io/ontech7/fastmemo-server:latest # downloaded, or built from this folder (see docker-compose.yml)
-    build: .
+    image: ${FASTMEMO_IMAGE:-ghcr.io/ontech7/fastmemo-server:1} # the published image (docker-compose.build.yml builds this folder instead)
     container_name: fastmemo-server
     restart: unless-stopped
+    # Locked down: the server only writes in /data (the volume) and /tmp.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=16m"]
     ports:
       - "${PORT:-8787}:8787"
     environment:
@@ -22,6 +26,7 @@ services:
       MAX_BODY_MB: ${MAX_BODY_MB:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
       LOG_LEVEL: ${LOG_LEVEL:-}
+      UPDATE_CHECK: ${UPDATE_CHECK:-}
       PORT: "8787"
       DATABASE_URL: postgres://fastmemo:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/fastmemo
     depends_on:

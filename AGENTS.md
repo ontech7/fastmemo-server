@@ -7,7 +7,7 @@
 ## Project Summary
 
 The self-hosted sync server for FastMemo: devices sync their (end-to-end encrypted) notes through it with a change feed and long
-polling, plus an ops dashboard. Node.js ≥ 22.18 running the TypeScript sources directly (type stripping, no build), `node:http`
+polling, plus an ops dashboard. Node.js ≥ 24 running the TypeScript sources directly (type stripping, no build), `node:http`
 with no framework, SQLite (`node:sqlite`) by default or PostgreSQL (`pg`). One Docker image.
 
 The app side is `fastmemo-app/src/libs/cloud/serverBackend.ts` (the `CloudBackend` that speaks this API). The API is documented
@@ -26,13 +26,19 @@ src/
   hub.ts        -> long-poll versions (boot.counter) and waiters
   http.ts       -> router, JSON bodies with a size limit, gzip, CORS, errors
   stats.ts      -> daily counters (buffered, flushed every 10 s), local-time days
+  updates.ts    -> the release check against GitHub, the updater's status file, install requests (a version number in a folder)
   auth.ts, config.ts, log.ts, model.ts
   store/        -> db.ts (Sql/Database, write mutex), sqlite.ts, postgres.ts (? -> $n), schema.ts (migrations)
 public/         -> the dashboard (vanilla JS module, strict CSP)
+contrib/updater/ -> the optional host updater (Python, runs as root under systemd): checks the release and the image again,
+                   copies the database, switches the image pinned by digest, rolls back. Units, compose overlay, updater.env.example
 test/           -> node:test suites (helpers.ts: TEST_DATABASE_URL runs them on Postgres)
 docs/           -> PROTOCOL.md (the API), DEPLOYMENT.md (setups, backups, troubleshooting), AI_SETUP.md (the install
                    runbook for AI assistants: keep it in step with the README), images/ (README screenshot)
-.github/        -> workflows/docker.yml: a v* tag (matching package.json) publishes ghcr.io/ontech7/fastmemo-server
+CHANGELOG.md, SECURITY.md -> the release notes (also the GitHub release's text), how to report a vulnerability
+.github/        -> dependabot.yml; workflows/ci.yml (SQLite, PostgreSQL, image build on every push and PR), codeql.yml;
+                   workflows/release.yml: a v* tag (matching package.json, with a CHANGELOG.md section) tests, builds both
+                   architectures natively, publishes ghcr.io/ontech7/fastmemo-server with signed provenance, opens the release
 ```
 
 ## Rules
@@ -55,6 +61,12 @@ docs/           -> PROTOCOL.md (the API), DEPLOYMENT.md (setups, backups, troubl
    Raspberry Pi's memory.
 10. **Never trust `X-Forwarded-For` from a public address**: only a proxy (a private address) may set the client's address, or a
     client picks its own and dodges the wrong-key limit.
+11. **Never give the container the Docker socket** (or any way to run Docker). The server only leaves a version number in a
+    folder; the updater, a separate service on the host, decides everything again. Nothing the server wrote is echoed back to
+    it.
+12. **Never make a 1.x release that needs more than the image to change.** The updater switches the image line of `.env` and
+    starts the same compose files, so a 1.x release must start with any earlier 1.x's compose files and `.env`. If it can't, it
+    is 2.0 (a new major, updated by hand). Keep `release.yml`'s path and the image's name and labels: the updater verifies them.
 
 ### ALWAYS
 
@@ -68,13 +80,19 @@ docs/           -> PROTOCOL.md (the API), DEPLOYMENT.md (setups, backups, troubl
    in `docs/DEPLOYMENT.md`.
 6. **Always give a test that starts its own server its own `describe`**: on Postgres the tests share one database, which every
    new test server empties (a server started inside another suite wipes that suite's data).
+7. **Always write a `### Security` entry** in the changelog section of a release for every security fix, with a regression test
+   in `test/hardening.test.ts`: the dashboard marks a release with that section as a security update.
+8. **Always write the release's `## [x.y.z]` section in `CHANGELOG.md` before tagging**: `release.yml` refuses a tag without it,
+   and its text becomes the GitHub release's notes. Keep `## [x.y.z] - unreleased` until the day it is tagged.
 
 ## Commands
 
 ```sh
 npm run dev | npm start | npm test | npm run test:pg | npm run typecheck | npm run format
-docker compose up -d --build   # the image, SQLite
-npm version 1.2.3 -m "chore: release v%s" && git push --follow-tags   # a release: the v* tag publishes the image
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build   # built from source, SQLite
+# a release: commit CHANGELOG.md first (the "## [1.2.3]" section, its date replacing "unreleased"; npm version needs a clean
+# tree), then the v* tag publishes the image and the GitHub release
+npm version 1.2.3 -m "chore: release v%s" && git push --follow-tags
 ```
 
 ## Subagents

@@ -8,9 +8,11 @@ import type { Database } from "./store/db.ts";
 import { openPostgres } from "./store/postgres.ts";
 import { migrate } from "./store/schema.ts";
 import { openSqlite } from "./store/sqlite.ts";
+import { githubReleases, Updates } from "./updates.ts";
 
 const FLUSH_MS = 10_000;
 const MAINTENANCE_MS = 60 * 60 * 1000;
+const ROLLBACK_CHECK_MS = 60_000;
 
 const version: string = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -46,6 +48,15 @@ const main = async () => {
   await migrate(db);
   const instance = await prepare(db);
 
+  const updates = new Updates({
+    current: version,
+    fetchReleases: githubReleases("ontech7/fastmemo-server", `fastmemo-server/${version}`),
+    enabled: config.updateCheck,
+    requestDir: config.updateRequestDir,
+    statusDir: config.updateStatusDir,
+    sqlite: config.database.driver === "sqlite",
+  });
+
   const app = createApp({
     config,
     db,
@@ -53,6 +64,7 @@ const main = async () => {
     adminKey: config.adminKey ?? config.accessKey,
     instance,
     version,
+    updates,
   });
   onRecord((record) => app.service.recordEvent(record));
   const port = await app.listen(config.port, config.host);
@@ -62,6 +74,7 @@ const main = async () => {
     port,
     database: config.database.driver === "sqlite" ? `sqlite ${config.database.path}` : "postgres",
     instance,
+    updateCheck: config.updateCheck,
   });
   if (!config.adminKey) {
     log.warn("FASTMEMO_ADMIN_KEY is not set: the access key, which every device holds, also opens the dashboard");
@@ -72,6 +85,11 @@ const main = async () => {
   const maintenance = setInterval(maintain, MAINTENANCE_MS);
   const firstMaintenance = setTimeout(maintain, 60_000);
   const sweep = setInterval(() => app.limiter.sweep(), 5 * 60_000);
+  updates.start();
+  // The updater writes its rollback once the previous version (this one) is running again: looked for soon, then every minute.
+  const checkRollback = () => app.checkRollback().catch((e) => log.error("rollback check failed", { error: e }));
+  const rollbackChecks = config.updateStatusDir ? setInterval(checkRollback, ROLLBACK_CHECK_MS).unref() : undefined;
+  const firstRollbackCheck = config.updateStatusDir ? setTimeout(checkRollback, 5000).unref() : undefined;
 
   let stopping = false;
   const shutdown = async (signal: string) => {
@@ -81,6 +99,9 @@ const main = async () => {
     setTimeout(() => process.exit(1), 10_000).unref();
     [flush, maintenance, sweep].forEach(clearInterval);
     clearTimeout(firstMaintenance);
+    clearInterval(rollbackChecks);
+    clearTimeout(firstRollbackCheck);
+    updates.stop();
     await app.close();
     await db.close();
     process.exit(0);

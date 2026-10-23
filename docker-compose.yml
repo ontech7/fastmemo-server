@@ -6,14 +6,18 @@
 #
 # The server and its dashboard are at http://<this computer's address>:8787. The web app needs HTTPS in front of it (README).
 #
-# `image` is the published image (amd64 and arm64): Docker downloads it, or builds this folder when it can't.
-# `docker compose up -d --build` always builds from the source here.
+# `image` is the published image (amd64 and arm64), the newest 1.x unless FASTMEMO_IMAGE in .env says otherwise.
+# To build the source in this folder instead: docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 services:
   fastmemo:
-    image: ghcr.io/ontech7/fastmemo-server:latest
-    build: .
+    image: ${FASTMEMO_IMAGE:-ghcr.io/ontech7/fastmemo-server:1}
     container_name: fastmemo-server
     restart: unless-stopped
+    # Locked down: the server only writes in /data (the volume) and /tmp.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=16m"]
     ports:
       - "${PORT:-8787}:8787"
     environment:
@@ -27,6 +31,7 @@ services:
       MAX_BODY_MB: ${MAX_BODY_MB:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
       LOG_LEVEL: ${LOG_LEVEL:-}
+      UPDATE_CHECK: ${UPDATE_CHECK:-}
       DATABASE_URL: ${DATABASE_URL:-}
       # Inside the container: always this port and this folder (PORT above is the one on your computer).
       PORT: "8787"

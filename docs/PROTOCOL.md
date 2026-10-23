@@ -28,14 +28,19 @@ Errors are `{"error": "<code>", "message": "<text>"}` with codes `bad_request` /
 
 ## Server
 
-| Request          | Auth | Response                                                                                              |
-| ---------------- | ---- | ----------------------------------------------------------------------------------------------------- |
-| `GET /v1/health` | none | `{ "ok": true }`                                                                                      |
-| `GET /v1/info`   | key  | `{ "server": "fastmemo-server", "version", "protocol": 1, "instance", "maxDevices", "maxNoteBytes" }` |
+| Request          | Auth | Response                                                                                                         |
+| ---------------- | ---- | ---------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/health` | none | `{ "ok": true }`                                                                                                 |
+| `GET /v1/info`   | key  | `{ "server": "fastmemo-server", "version", "protocol": 1, "instance", "maxDevices", "maxNoteBytes", "update"? }` |
 
 `instance` changes when the database is new: a different server, or the same one reset. `maxNoteBytes` (`MAX_NOTE_MB`) is the
 largest note a push may carry, measured as the UTF-8 bytes of the note's JSON as pushed (encrypted): the app doesn't send a note
 over it and makes it device-only instead. An app that doesn't read it gets the note refused (`rejected`) as before.
+
+`update` is optional: `{ "latest": "1.2.0", "security": true, "url": "https://github.com/..." }` when a newer release is out
+(`security`: one of the releases since this version has a Security section in its changelog). It is absent when the server is up
+to date, when `UPDATE_CHECK` is off, or before the first check ran. The protocol stays 1; an app that doesn't read it ignores
+it.
 
 ## Devices
 

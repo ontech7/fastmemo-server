@@ -38,8 +38,9 @@ Rather not run a server? FastMemo also syncs through your own Firebase project: 
 - [Other setups](#other-setups)
 - [Configuration](#configuration)
 - [Backups and restore](#backups-and-restore)
-- [Updating](#updating)
+- [Updates](#updates)
 - [Security](#security)
+- [Quality](#quality)
 - [Development](#development)
 
 ## How it works
@@ -205,9 +206,9 @@ show (note titles, device credentials); the notes' content stays end-to-end encr
 - **PostgreSQL**: set `POSTGRES_PASSWORD` in `.env` and run `docker compose -f docker-compose.postgres.yml up -d`, or point
   `DATABASE_URL` at your own PostgreSQL. SQLite is plenty for a person or a family.
 - **Coolify**: deploy this repository with the **Docker Compose** build pack and `/docker-compose.coolify.yml`, on a domain like
-  `https://notes.example.com:8787`. Coolify handles HTTPS and generates the keys.
-- **Without Docker**, with Node.js 22.18 or newer: `npm ci --omit=dev`, then
-  `node --env-file=.env --disable-warning=ExperimentalWarning src/main.ts`.
+  `https://notes.example.com:8787`. Coolify handles HTTPS and generates the keys. Update it with **Redeploy**.
+- **Without Docker**, with Node.js 24 or newer: `npm ci --omit=dev`, then `node --env-file=.env src/main.ts`. On Node.js 20 or
+  22, install Node.js 24 first (for example `nvm install 24`).
 
 Step by step, and troubleshooting: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
@@ -215,25 +216,27 @@ Step by step, and troubleshooting: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 Settings go in `.env` (on Coolify, in Environment Variables). Run `docker compose up -d` after a change.
 
-| Variable                  | Default        | What it does                                                                                                              |
-| ------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `FASTMEMO_ACCESS_KEY`     | none: required | The key devices connect with, at least 16 characters. The server won't start without it.                                  |
-| `FASTMEMO_ADMIN_KEY`      | the access key | Opens the dashboard.                                                                                                      |
-| `PORT`                    | `8787`         | The port on your computer. With Docker, `127.0.0.1:8787` hides it from your network.                                      |
-| `TZ`                      | `UTC`          | The time zone the dashboard counts days in.                                                                               |
-| `MAX_DEVICES`             | `10`           | How many devices can connect.                                                                                             |
-| `MAX_NOTE_MB`             | `5`            | The largest note, in MB, encrypted: its text can be about 3/4 of it. Bigger notes stay offline on their device.           |
-| `MAX_BODY_MB`             | `64`           | The largest request, in MB.                                                                                               |
-| `TRUST_PROXY`             | `false`        | `true` behind Tailscale Serve, Caddy, Cloudflare Tunnel, nginx, Traefik or Coolify (trusted from private addresses only). |
-| `LOG_LEVEL`               | `info`         | `debug`, `info`, `warn` or `error`.                                                                                       |
-| `DATABASE_URL`            | SQLite         | `postgres://user:password@host:5432/db` for PostgreSQL.                                                                   |
-| `DATA_DIR`                | `./data`       | Without Docker: where the SQLite file goes (the image uses `/data`).                                                      |
-| `HOST`                    | `127.0.0.1`    | Without Docker: the address to listen on. `0.0.0.0` puts the server on your network.                                      |
-| `POSTGRES_PASSWORD`       |                | Only for `docker-compose.postgres.yml`.                                                                                   |
-| `DOMAIN`                  |                | Only for `docker-compose.caddy.yml`.                                                                                      |
-| `CLOUDFLARE_TUNNEL_TOKEN` |                | Only for `docker-compose.cloudflare.yml`.                                                                                 |
-| `TS_AUTHKEY`              |                | Only for `docker-compose.tailscale.yml`: signs it in, instead of the link in its logs.                                    |
-| `TS_HOSTNAME`             | `fastmemo`     | Only for `docker-compose.tailscale.yml`: the first part of its address.                                                   |
+| Variable                  | Default          | What it does                                                                                                              |
+| ------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `FASTMEMO_ACCESS_KEY`     | none: required   | The key devices connect with, at least 16 characters. The server won't start without it.                                  |
+| `FASTMEMO_ADMIN_KEY`      | the access key   | Opens the dashboard.                                                                                                      |
+| `PORT`                    | `8787`           | The port on your computer. With Docker, `127.0.0.1:8787` hides it from your network.                                      |
+| `TZ`                      | `UTC`            | The time zone the dashboard counts days in.                                                                               |
+| `MAX_DEVICES`             | `10`             | How many devices can connect.                                                                                             |
+| `MAX_NOTE_MB`             | `5`              | The largest note, in MB, encrypted: its text can be about 3/4 of it. Bigger notes stay offline on their device.           |
+| `MAX_BODY_MB`             | `64`             | The largest request, in MB.                                                                                               |
+| `TRUST_PROXY`             | `false`          | `true` behind Tailscale Serve, Caddy, Cloudflare Tunnel, nginx, Traefik or Coolify (trusted from private addresses only). |
+| `LOG_LEVEL`               | `info`           | `debug`, `info`, `warn` or `error`.                                                                                       |
+| `UPDATE_CHECK`            | `on`             | `off` stops the check, every 6 hours, for a newer release on GitHub (the dashboard says when there is one: see Updates).  |
+| `FASTMEMO_IMAGE`          | the newest `1.x` | The image the compose files run (not Coolify's). The updater sets it to one exact version.                                |
+| `DATABASE_URL`            | SQLite           | `postgres://user:password@host:5432/db` for PostgreSQL.                                                                   |
+| `DATA_DIR`                | `./data`         | Without Docker: where the SQLite file goes (the image uses `/data`).                                                      |
+| `HOST`                    | `127.0.0.1`      | Without Docker: the address to listen on. `0.0.0.0` puts the server on your network.                                      |
+| `POSTGRES_PASSWORD`       |                  | Only for `docker-compose.postgres.yml`.                                                                                   |
+| `DOMAIN`                  |                  | Only for `docker-compose.caddy.yml`.                                                                                      |
+| `CLOUDFLARE_TUNNEL_TOKEN` |                  | Only for `docker-compose.cloudflare.yml`.                                                                                 |
+| `TS_AUTHKEY`              |                  | Only for `docker-compose.tailscale.yml`: signs it in, instead of the link in its logs.                                    |
+| `TS_HOSTNAME`             | `fastmemo`       | Only for `docker-compose.tailscale.yml`: the first part of its address.                                                   |
 
 ## Backups and restore
 
@@ -258,25 +261,118 @@ Then click **Ask every device for a full sync** in the dashboard: the devices se
 volume is `<folder name>_fastmemo-data` (`docker volume ls` lists it). For PostgreSQL, see
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#backups).
 
-## Updating
+## Updates
+
+The dashboard shows the version it runs and, unless you set `UPDATE_CHECK=off`, asks GitHub every 6 hours which release is the
+latest (that request is all that leaves the server). A newer one appears next to the version, with its release notes; one with a
+**Security** section in its notes is marked as a security update. The app will show it too, from a later app version. To hear
+about releases by email, open the repository on GitHub and choose **Watch → Custom → Releases**.
+
+**By hand** works on every setup. In the server's folder:
 
 ```sh
 git pull
-docker compose pull
-docker compose up -d
+docker compose pull && docker compose up -d
 ```
 
-With another compose file, add `-f <file>` to each command. If `docker compose pull` fails, `docker compose up -d --build`
-builds the new version from source instead. The database is upgraded on start.
+With another compose file, add `-f <file>` to each command. The compose files run the newest `1.x` image. A new major version
+(2.0) means reading its notes first. Then set `FASTMEMO_IMAGE` in `.env`, for example
+`FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:2`. The database is upgraded on start. If `docker compose pull` fails, or you
+changed the code, [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#the-image) shows how to build it from source. Once the updater has put
+a `FASTMEMO_IMAGE=...@sha256:...` line in `.env`, updating by hand means changing that line to the new version first, in full,
+for example `FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:1.1.0` (or deleting the line), then
+`docker compose pull && docker compose up -d`.
+
+**With one click**, if you install the optional updater on the host: the dashboard's **Install** button does the same, safely,
+and shows its progress. It works for SQLite, for the published image, and for the same major version (a new major, PostgreSQL
+and source builds show the commands to run instead). The updater is the only piece that runs as root, because it drives Docker.
+The server never gets the Docker socket: it can only leave a version number in a folder, and the updater decides everything
+again by itself:
+
+- it reads nothing but that version (no symlinks, no special files, a few bytes at most), and echoes nothing back;
+- the version must be a published, final release of this repository, newer than the running one, of the same major;
+- the image it pulls must say it was built from this repository, for that version, and it runs pinned by its digest;
+- its **build provenance** is verified (built by this repository's release workflow, from that version's tag) when the GitHub
+  CLI and a token are on the host. Without them the update still goes ahead, and the dashboard says "Provenance not checked":
+  every update says "verified" or "not checked". `VERIFY_PROVENANCE=required` makes the check mandatory;
+- the database is copied first (if there isn't room for the copy, the update stops and nothing changes), and if the new version
+  is not healthy within two minutes, or the run is stopped half-way, the previous image and database come back. An update a
+  power cut interrupted is undone at the next boot. If an update is rolled back, the server asks your devices to send their
+  recent changes again.
+
+<details>
+<summary><strong>Install the updater</strong></summary>
+
+You need Linux with systemd and Python 3 (a Raspberry Pi or a VPS, say), and the server started with `docker compose` from a
+cloned folder (not Coolify). Read [`contrib/updater`](contrib/updater) first: it runs as root. Set `FASTMEMO_ADMIN_KEY` in
+`.env` first: otherwise the access key, which every device holds, opens the dashboard and its **Install** button.
+
+In the server's folder, in one terminal (the commands use `$FILE`), set `FILE` to the compose file you started the server with.
+The commands copy the updater in place, tell it where your server's folder is and which compose files it uses (in
+`/etc/fastmemo/updater.env`, and in the folder's `.env`, so every plain `docker compose ...` there keeps the updater's extra
+file), let it write in that folder (it keeps `.env` up to date), start it, and start the server with the extra file:
+
+```sh
+# or docker-compose.caddy.yml / docker-compose.cloudflare.yml / docker-compose.tailscale.yml — the one you started the server with
+FILE=docker-compose.yml
+sudo install -m 0755 -D contrib/updater/fastmemo-updater.py /usr/local/lib/fastmemo/fastmemo-updater.py
+sudo install -m 0644 -D contrib/updater/updater.env.example /etc/fastmemo/updater.env
+sudo install -m 0644 contrib/updater/fastmemo-updater.path contrib/updater/fastmemo-updater.service /etc/systemd/system/
+sudo install -d -o 1000 -g 1000 -m 0750 /var/lib/fastmemo-update/request
+sudo install -d -m 0755 /var/lib/fastmemo-update/status
+sudo install -d -m 0700 /var/lib/fastmemo-update/backup /var/lib/fastmemo-update/docker /var/lib/fastmemo-update/gh
+sudo sed -i "s|^COMPOSE_DIR=.*|COMPOSE_DIR=$PWD|" /etc/fastmemo/updater.env
+sudo sed -i "s|^COMPOSE_FILE=.*|COMPOSE_FILE=${FILE}:contrib/updater/compose.updater.yaml|" /etc/fastmemo/updater.env
+printf '\nCOMPOSE_FILE=%s:contrib/updater/compose.updater.yaml\n' "$FILE" >> .env
+sudo mkdir -p /etc/systemd/system/fastmemo-updater.service.d
+printf '[Service]\nReadWritePaths=%s\n' "$PWD" | sudo tee /etc/systemd/system/fastmemo-updater.service.d/checkout.conf
+sudo systemctl daemon-reload
+sudo systemctl enable fastmemo-updater.service
+sudo systemctl enable --now fastmemo-updater.path
+docker compose -f "$FILE" -f contrib/updater/compose.updater.yaml up -d
+```
+
+From then on `docker compose pull`, `up -d`, `logs` and the rest work as before in that folder: the `COMPOSE_FILE` line in
+`.env` adds the updater's file. The updater refuses to switch a server started with other compose files than the ones in
+`updater.env` (it would come back without its proxy or tunnel): to change setup, change both `COMPOSE_FILE` lines.
+
+For the provenance check, install a recent [GitHub CLI](https://cli.github.com) (`gh`, 2.49 or newer) and put a token with **no
+scopes** (**GitHub → Settings → Developer settings → Personal access tokens**, no boxes ticked) in a file only root reads:
+
+```sh
+sudo install -m 0600 /dev/null /etc/fastmemo/updater.secret
+sudo nano /etc/fastmemo/updater.secret    # one line: GH_TOKEN=<the token>
+```
+
+The details (what each status means, where the backups are, troubleshooting a rollback) are in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#the-updater).
+
+</details>
 
 ## Security
 
+| Who                                              | What they get                                                                                                                                                    |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Someone on the internet without a key            | Nothing. Wrong keys are logged, and an address that fails 20 times in 15 minutes is refused for a while.                                                         |
+| Someone with the access key                      | They can join as a device, download the encrypted notes, remove devices or wipe the server's copy. Without the password, they can't read the notes.              |
+| A device (its token)                             | Its own sync. Removing the device stops its token at once.                                                                                                       |
+| Someone with the admin key                       | The dashboard: devices, backups, removing devices and, with the updater, installing a newer release (see Updates).                                               |
+| The tunnel or proxy provider (Cloudflare Tunnel) | The traffic as plain HTTP would show it: note titles, device names and tokens. Not the notes' content. Tailscale and Caddy keep the certificate on your machine. |
+| Someone on your network, without HTTPS           | The same, and with the device credentials they could change or delete notes. Use HTTPS (see [HTTPS](#https)).                                                    |
+| A compromised server container                   | The encrypted notes and the titles. It has no capabilities, a read-only filesystem, no Docker socket, and only its own settings.                                 |
+| Someone with root on the host                    | Everything on it, the updater included. The notes stay encrypted, but the server can't protect itself from the machine's owner.                                  |
+
 - **Encrypted on your devices:** the contents of your notes (text, checklists, kanban cards, code).
 - **Not encrypted:** note titles, category names, kanban column names, device names, dates and note types. The server stores
-  them as they are.
-- **The access key** lets a device join. Whoever has it can download the encrypted notes, remove devices or wipe the server's
-  copy, but can't read the notes without the encryption password.
-- **Wrong keys** are logged. An address that fails 20 times in 15 minutes is refused for a while.
+  them as they are, and sees when each device syncs and how big the notes are.
+- **The container** runs as an unprivileged user, read-only, with all Linux capabilities dropped and no new privileges. It
+  writes only in `/data` (its database, readable by that user only) and a small `/tmp`. It gets only its own settings from
+  `.env`, never another service's secret (a tunnel token, a Tailscale key). After an update the image is pinned by its digest.
+- **The updater** is separate and optional: the server never gets the Docker socket. See [Updates](#updates).
+- Before 1.0.0 the code was reviewed. The review found, among others, a request that took the server down (`GET //`), a forged
+  `X-Forwarded-For` that dodged the wrong-key limit, a limiter that could be made to grow, a backup held in memory and files
+  readable by other users. All were fixed, each with a regression test in [`test/hardening.test.ts`](test/hardening.test.ts). To
+  report a vulnerability, see [`SECURITY.md`](SECURITY.md).
 
 ### Lost device or leaked key
 
@@ -287,9 +383,25 @@ builds the new version from source instead. The database is upgraded on start.
   connected devices keep working, so also remove any device you don't recognize.
 - **Encryption password:** change it in the app (**Settings → Cloud Sync → Change password**). The server never sees it.
 
+## Quality
+
+These checks run on GitHub for every pull request and every push to `main` and `dev`, and a release is only published when the
+tests pass:
+
+| Check                     | What it covers                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **Types and tests**       | TypeScript strict mode, and the test suite on a real server: the API, the push guard, the dashboard, long polls                 |
+| **SQLite and PostgreSQL** | The same suite runs on both databases                                                                                           |
+| **The app's sync rules**  | The push guard decides like the app's Firebase adapter; the app's own `sync-server.test.mjs` checks the pair                    |
+| **The updater**           | Tested against a stand-in Docker: refusals, the switch, a version that never becomes healthy, a stop half-way, a power cut      |
+| **Security regressions**  | One test per issue found in reviews, in `test/hardening.test.ts`                                                                |
+| **CodeQL**                | GitHub's security-extended queries on the server and the updater, weekly and on every pull request                              |
+| **Dependabot**            | Weekly updates of the npm packages, the GitHub Actions and the Docker base image                                                |
+| **Multi-arch image**      | `linux/amd64` and `linux/arm64`, each built on its own kind of machine, published with signed build provenance on every release |
+
 ## Development
 
-The API is in [docs/PROTOCOL.md](docs/PROTOCOL.md). Node.js 22.18 or newer runs the TypeScript sources directly, with no build.
+The API is in [docs/PROTOCOL.md](docs/PROTOCOL.md). Node.js 24 or newer runs the TypeScript sources directly, with no build.
 
 ```sh
 npm install
@@ -299,7 +411,9 @@ npm run typecheck
 TEST_DATABASE_URL=postgres://user:password@localhost:5432/test npm run test:pg   # drops that database's tables
 ```
 
-Pushing a `v*` tag publishes the image (`.github/workflows/docker.yml`).
+A release: write its section in [CHANGELOG.md](CHANGELOG.md), `npm version`, and push the `v*` tag.
+`.github/workflows/release.yml` tests, publishes the image with signed provenance and opens the GitHub release with that section
+as its notes.
 
 ## License
 

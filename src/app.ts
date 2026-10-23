@@ -11,6 +11,7 @@ import { apiRoutes } from "./routes.ts";
 import { Service } from "./service.ts";
 import { Stats } from "./stats.ts";
 import type { Database } from "./store/db.ts";
+import type { Updates } from "./updates.ts";
 
 export interface AppOptions {
   config: Pick<Config, "maxDevices" | "maxNoteBytes" | "maxBodyBytes" | "trustProxy">;
@@ -19,6 +20,7 @@ export interface AppOptions {
   adminKey: string;
   instance: string;
   version: string;
+  updates?: Updates;
 }
 
 export interface App {
@@ -29,6 +31,8 @@ export interface App {
   limiter: AuthLimiter;
   /** Resolves with the port it listens on (0 picks a free one). */
   listen(port: number, host?: string): Promise<number>;
+  /** Asks every device for a full sync when the updater's last run ended with a rollback or a failure not handled yet. */
+  checkRollback(): Promise<void>;
   /** Answers the waiting long polls, stops accepting requests, writes what's in memory. */
   close(): Promise<void>;
 }
@@ -81,7 +85,11 @@ export const createApp = (options: AppOptions): App => {
 
   const server = createHttpServer({
     routes: [
-      ...apiRoutes(service, { version: options.version, instance: options.instance }),
+      ...apiRoutes(service, {
+        version: options.version,
+        instance: options.instance,
+        update: () => options.updates?.summary() ?? null,
+      }),
       ...adminRoutes({
         service,
         stats,
@@ -90,6 +98,7 @@ export const createApp = (options: AppOptions): App => {
         instance: options.instance,
         startedAt,
         limits: { maxDevices: config.maxDevices, maxNoteBytes: config.maxNoteBytes, maxBodyBytes: config.maxBodyBytes },
+        updates: options.updates,
       }),
     ],
     maxBodyBytes: config.maxBodyBytes,
@@ -113,6 +122,19 @@ export const createApp = (options: AppOptions): App => {
           resolve(typeof address === "object" && address ? address.port : port);
         });
       }),
+    checkRollback: async () => {
+      const status = options.updates?.status();
+      // A failed run may have put the copy back too: "could not be undone completely" comes after a restore.
+      if (status?.state !== "rolled_back" && status?.state !== "failed") return;
+      const devices = await service.fullSyncAfterRollback(status.at);
+      if (devices) {
+        log.warn("the database may be a copy from before an update: asked every device for a full sync", {
+          version: status.version,
+          state: status.state,
+          devices,
+        });
+      }
+    },
     close: async () => {
       hub.close();
       await new Promise<void>((resolve) => {

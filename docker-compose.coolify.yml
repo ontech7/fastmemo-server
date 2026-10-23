@@ -4,11 +4,16 @@
 # domain in Coolify as https://notes.example.com:8787 (the :8787 is the container's port, people still use 443).
 # Coolify generates both keys on the first deploy: find them under Environment Variables.
 # Coolify builds the image from this repository. To run the published one instead, replace `build: .` with
-# `image: ghcr.io/ontech7/fastmemo-server:latest`.
+# `image: ghcr.io/ontech7/fastmemo-server:1`.
 services:
   fastmemo:
     build: .
     restart: unless-stopped
+    # Locked down: the server only writes in /data (the volume) and /tmp.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=16m"]
     environment:
       SERVICE_URL_FASTMEMO_8787: /
       FASTMEMO_ACCESS_KEY: ${SERVICE_PASSWORD_64_ACCESSKEY}
@@ -18,6 +23,7 @@ services:
       MAX_DEVICES: ${MAX_DEVICES:-10}
       MAX_NOTE_MB: ${MAX_NOTE_MB:-5}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      UPDATE_CHECK: ${UPDATE_CHECK:-}
       PORT: "8787"
       DATA_DIR: /data
     volumes:

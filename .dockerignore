@@ -17,3 +17,4 @@ docker-compose*.yml
 .prettierrc.json
 tsconfig.json
 tailscale
+contrib
