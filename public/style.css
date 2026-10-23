@@ -4,6 +4,7 @@
   --surface: #131a3c;
   --surface-muted: #1a2248;
   --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
   --text: #f4f6fa;
   --text-secondary: #aeb6d6;
   --text-muted: #717ba6;
@@ -19,6 +20,7 @@
   --deletes: #c7a12b;
   --radius: 14px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   color-scheme: dark;
 }
 
@@ -60,7 +62,7 @@ h1 {
 }
 
 h2 {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 650;
 }
 
@@ -76,8 +78,12 @@ h2 {
   position: absolute;
   width: 1px;
   height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
   overflow: hidden;
-  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
 }
 
 button {
@@ -85,9 +91,12 @@ button {
   cursor: pointer;
   border-radius: 10px;
   padding: 8px 14px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   color: var(--text);
-  background: transparent;
+  background: rgba(255, 255, 255, 0.03);
+  transition:
+    background 0.15s,
+    border-color 0.15s;
 }
 
 button:disabled {
@@ -113,16 +122,16 @@ button.primary:hover:not(:disabled) {
 }
 
 button.ghost:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 button.danger {
-  color: #f1a0a1;
-  border-color: rgba(224, 104, 106, 0.35);
+  color: color-mix(in srgb, var(--error) 55%, white);
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
 }
 
 button.danger:hover:not(:disabled) {
-  background: rgba(224, 104, 106, 0.12);
+  background: color-mix(in srgb, var(--error) 14%, transparent);
 }
 
 button.small-button {
@@ -144,7 +153,7 @@ input {
   background: rgba(19, 26, 60, 0.82);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 18px;
+  padding: 20px;
   margin-bottom: 16px;
 }
 
@@ -378,6 +387,7 @@ input {
 }
 
 .table-wrap {
+  position: relative;
   overflow-x: auto;
 }
 
@@ -409,6 +419,10 @@ tr:last-child td {
   border-bottom: 0;
 }
 
+table.is-empty thead {
+  display: none;
+}
+
 .device-name {
   font-weight: 600;
 }
@@ -416,7 +430,7 @@ tr:last-child td {
 .device-id {
   font-size: 12px;
   color: var(--text-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
 }
 
 .pill {
@@ -445,7 +459,16 @@ tr:last-child td {
 
 .empty {
   color: var(--text-muted);
-  padding: 14px 10px;
+  padding: 22px 10px;
+  text-align: center;
+  font-size: 13px;
+}
+
+.empty-title {
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 2px;
 }
 
 .grid-2 {
@@ -496,6 +519,10 @@ tr:last-child td {
   border-bottom: 0;
 }
 
+.events li.empty {
+  display: block;
+}
+
 .events time {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
@@ -518,7 +545,7 @@ tr:last-child td {
 
 .event-detail {
   color: var(--text-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 12px;
   word-break: break-word;
   margin-top: 2px;
@@ -540,13 +567,20 @@ tr:last-child td {
 
 .badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 2px 9px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  text-decoration: none;
   border: 1px solid var(--accent-muted-border);
   background: var(--accent-muted);
   color: var(--text);
+}
+
+a.badge:hover {
+  filter: brightness(1.15);
 }
 
 .badge-update {
@@ -554,87 +588,431 @@ tr:last-child td {
   border-color: var(--accent-muted-border);
 }
 
+/* Red, so a security fix never reads like an ordinary update. */
 .badge-security {
-  background: rgba(224, 104, 106, 0.18);
-  border-color: rgba(224, 104, 106, 0.6);
-  color: #f1a0a1;
+  background: color-mix(in srgb, var(--error) 20%, transparent);
+  border-color: color-mix(in srgb, var(--error) 65%, transparent);
+  color: color-mix(in srgb, var(--error) 55%, white);
 }
 
 #updates-card .section-head {
-  margin-bottom: 8px;
+  margin-bottom: 14px;
 }
 
-.update-status {
+#updates-line p {
+  margin: 0;
+}
+
+#updates-line .error {
   margin-top: 10px;
-  padding: 8px 12px;
-  border-radius: 10px;
-  background: var(--surface-muted);
-  font-size: 14px;
+}
+
+.versions {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 8px;
-  align-items: center;
+  gap: 12px 36px;
+  margin: 0;
 }
 
-.update-status.ok {
-  border-left: 3px solid var(--ok);
+.versions dt {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-weight: 600;
 }
 
-.update-status.bad {
-  border-left: 3px solid var(--error);
-}
-
-.notes {
-  margin-top: 12px;
-  max-height: 340px;
-  overflow-y: auto;
-  font-size: 14px;
-  color: var(--text-secondary);
-}
-
-.release {
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.release:last-child {
-  border-bottom: 0;
-}
-
-.release h3 {
-  margin: 0 0 6px;
-  font-size: 15px;
+.versions dd {
+  margin: 3px 0 0;
   color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-size: 16px;
+  font-weight: 600;
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.release h3 a {
+.ok-text {
+  color: var(--ok);
+}
+
+/* The updater's progress and result */
+
+.update-status {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  font-size: 14px;
+}
+
+.update-status.ok {
+  border-color: color-mix(in srgb, var(--ok) 50%, transparent);
+  background: color-mix(in srgb, var(--ok) 10%, var(--surface));
+}
+
+.update-status.bad {
+  border-color: color-mix(in srgb, var(--error) 55%, transparent);
+  background: color-mix(in srgb, var(--error) 10%, var(--surface));
+}
+
+.update-status.warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 7%, var(--surface));
+}
+
+/* An older run: one quiet line, so it doesn't look like the current one. */
+.update-status.last {
+  background: transparent;
+  padding: 10px 14px;
+  color: var(--text-secondary);
+}
+
+.status-head {
+  display: flex;
+  align-items: center;
+  gap: 8px 10px;
+  flex-wrap: wrap;
+}
+
+/* The title takes the room left, so it wraps next to its icon instead of under it. */
+.status-text {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.status-message {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.update-status.last .status-message {
+  margin-left: 20px;
   font-size: 13px;
-  font-weight: 400;
+}
+
+.update-status code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chip-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.chip-value {
+  font-weight: 600;
+}
+
+.chip.ok .chip-value {
+  color: var(--ok);
+}
+
+.chip.warn .chip-value {
+  color: var(--warn);
+}
+
+.pulse,
+.tone-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+}
+
+.pulse {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.tone-dot.ok {
+  background: var(--ok);
+}
+
+.tone-dot.bad {
+  background: var(--error);
+}
+
+.tone-dot.warn {
+  background: var(--warn);
+}
+
+.spinner {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent-soft);
+  animation: spin 0.9s linear infinite;
+}
+
+.end-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--bg);
+}
+
+.end-mark.done {
+  background: var(--ok);
+}
+
+.end-mark.done::after {
+  content: "✓";
+}
+
+.end-mark.failed {
+  background: var(--error);
+}
+
+.end-mark.failed::after {
+  content: "!";
+}
+
+.end-mark.rolled_back,
+.end-mark.refused {
+  background: var(--warn);
+}
+
+.end-mark.rolled_back::after {
+  content: "↺";
+}
+
+.end-mark.refused::after {
+  content: "–";
+}
+
+/* The steps: in a row on a wide screen, a column on a phone. */
+.steps {
+  list-style: none;
+  margin: 16px 0 2px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.3;
+  color: var(--text-muted);
+}
+
+/* The line from the previous step to this one. */
+.step::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  left: calc(-50% + 11px);
+  right: calc(50% + 11px);
+  height: 2px;
+  background: var(--border-strong);
+}
+
+.step:first-child::before {
+  display: none;
+}
+
+.step.done::before,
+.step.current::before {
+  background: var(--ok);
+}
+
+.step-marker {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.step.done {
+  color: var(--text-secondary);
+}
+
+.step.done .step-marker {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: var(--bg);
+}
+
+.step.done .step-marker::after {
+  content: "✓";
+}
+
+.step.current {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.step.current .step-marker {
+  border-color: var(--accent-soft);
+  border-top-color: transparent;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-soft) 55%, transparent);
+  }
+  50% {
+    opacity: 0.6;
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+/* Release notes */
+
+.notes {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 460px;
+  overflow-y: auto;
+}
+
+.release {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: rgba(5, 9, 26, 0.35);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.release.security {
+  border-color: color-mix(in srgb, var(--error) 45%, transparent);
+}
+
+.release-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.release h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.release-meta {
+  display: flex;
+  gap: 14px;
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 .release h4,
 .release h5 {
-  margin: 10px 0 4px;
-  color: var(--text);
-  font-size: 13px;
+  margin: 14px 0 4px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+}
+
+.release h4.security,
+.release h5.security {
+  color: color-mix(in srgb, var(--error) 75%, white);
 }
 
 .release p {
-  margin: 4px 0;
+  margin: 6px 0;
 }
 
 .release ul {
   margin: 4px 0;
-  padding-left: 20px;
+  padding-left: 18px;
 }
 
-.release a,
-.update-status a {
+.release li + li {
+  margin-top: 3px;
+}
+
+.release li::marker {
+  color: var(--text-muted);
+}
+
+.release strong {
+  color: var(--text);
+}
+
+.release code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.release a {
   color: var(--accent-soft);
+  overflow-wrap: anywhere;
+}
+
+/* The commands for an update by hand */
+
+#update-commands {
+  margin-top: 16px;
 }
 
 #update-commands pre {
@@ -643,13 +1021,43 @@ tr:last-child td {
   border-radius: 10px;
   background: var(--bg);
   border: 1px solid var(--border);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mono);
   font-size: 13px;
   overflow-x: auto;
 }
 
 #update-commands p {
   margin: 8px 0 0;
+}
+
+@media (max-width: 720px) {
+  .steps {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .step {
+    flex-direction: row;
+    padding: 0;
+    text-align: left;
+    gap: 10px;
+  }
+
+  .step::before {
+    top: -10px;
+    left: 10px;
+    right: auto;
+    width: 2px;
+    height: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse,
+  .spinner,
+  .step.current .step-marker {
+    animation: none;
+  }
 }
 
 .footer {

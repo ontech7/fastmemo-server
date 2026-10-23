@@ -188,8 +188,21 @@ const renderChart = (history) => {
 
 const renderDevices = (devices) => {
   const body = $("devices");
+  // No headers over an empty table: they'd make it wider than a phone for one line of text.
+  body.parentElement.classList.toggle("is-empty", devices.length === 0);
   if (devices.length === 0) {
-    body.replaceChildren(el("tr", {}, el("td", { colspan: 6, class: "empty", text: "No device connected yet." })));
+    body.replaceChildren(
+      el(
+        "tr",
+        {},
+        el(
+          "td",
+          { colspan: 6, class: "empty" },
+          el("div", { class: "empty-title", text: "No device connected yet" }),
+          el("div", { text: "A device shows up here once the FastMemo app connects with the access key." })
+        )
+      )
+    );
     return;
   }
   body.replaceChildren(
@@ -254,7 +267,14 @@ const renderFacts = (o) => {
 const renderEvents = (events) => {
   const list = $("events");
   if (events.length === 0) {
-    list.replaceChildren(el("li", { class: "empty", text: "Nothing to report." }));
+    list.replaceChildren(
+      el(
+        "li",
+        { class: "empty" },
+        el("div", { class: "empty-title", text: "Nothing to report" }),
+        el("div", { text: "The server's warnings and errors show up here." })
+      )
+    );
     return;
   }
   list.replaceChildren(
@@ -299,9 +319,46 @@ const STATE_TEXT = {
   rolled_back: "Rolled back to the previous version",
   refused: "Refused",
 };
+// The updater's steps in the order it goes through them.
+const STEPS = [
+  ["queued", "Queued"],
+  ["checking", "Checking the release"],
+  ["downloading", "Downloading"],
+  ["verifying", "Verifying the image"],
+  ["backing_up", "Copying the database"],
+  ["restarting", "Restarting"],
+  ["done", "Done"],
+];
+const END_TEXT = {
+  done: (version) => `Updated to ${version}`,
+  failed: (version) => `The update to ${version} failed`,
+  rolled_back: (version) => `The update to ${version} was rolled back`,
+  refused: (version) => `The updater refused ${version}`,
+};
+const END_TONE = { done: "ok", failed: "bad", rolled_back: "warn", refused: "warn" };
+// The updater starts within seconds of a request: past this, something on the host is off.
+const WAIT_FOR_UPDATER = 2 * 60_000;
 
 let lastUpdates = null;
 let lastNotesKey = null;
+let lastStatusKey = null;
+/**
+ * The install asked from this tab. `statusAt` is the status seen at the click: a status written after it is this run's.
+ * (Compared with the updater's own clock, not the browser's, which may be off.)
+ */
+let requested = null;
+
+/** `code` and **bold**, as nodes. */
+const emphasis = (text) =>
+  text
+    .split(/(`[^`]+`|\*\*[^*]+\*\*)/)
+    .map((part) =>
+      part.length > 2 && part.startsWith("`") && part.endsWith("`")
+        ? el("code", { text: part.slice(1, -1) })
+        : part.length > 4 && part.startsWith("**") && part.endsWith("**")
+          ? el("strong", { text: part.slice(2, -2) })
+          : part
+    );
 
 /** Release notes are text from GitHub: built as nodes, links only to https, never HTML. */
 const inline = (text) => {
@@ -310,13 +367,16 @@ const inline = (text) => {
   const link = /\[([^\]]*)\]\(((?:[^()\s]|\([^()\s]*\))*)\)/g;
   let from = 0;
   for (let m = link.exec(text); m; m = link.exec(text)) {
-    parts.push(text.slice(from, m.index));
+    parts.push(...emphasis(text.slice(from, m.index)));
+    // A link with no text shows its address, or it would be an invisible anchor.
     parts.push(
-      m[2].startsWith("https://") ? el("a", { href: m[2], rel: "noopener noreferrer", target: "_blank", text: m[1] }) : m[1]
+      m[2].startsWith("https://")
+        ? el("a", { href: m[2], rel: "noopener noreferrer", target: "_blank", text: m[1] || m[2] })
+        : m[1]
     );
     from = m.index + m[0].length;
   }
-  parts.push(text.slice(from));
+  parts.push(...emphasis(text.slice(from)));
   return parts;
 };
 
@@ -337,7 +397,8 @@ const renderNotes = (markdown) => {
       flush();
     } else if (heading) {
       flush();
-      nodes.push(el(heading[1] === "##" ? "h4" : "h5", {}, inline(heading[2])));
+      const security = heading[2].trim().toLowerCase() === "security";
+      nodes.push(el(heading[1] === "##" ? "h4" : "h5", { class: security ? "security" : null }, inline(heading[2])));
     } else if (item) {
       if (paragraph.length > 0) flush();
       if (!list) {
@@ -363,6 +424,185 @@ const copyText = async (text) => {
   }
 };
 
+/** What the status box shows: a request the updater hasn't answered, an install running, its result, or an older one. */
+const statusView = (u) => {
+  if (!u.enabled) return null;
+  const status = u.status;
+  if (requested && !(status && status.at > requested.statusAt)) {
+    return Date.now() - requested.at < WAIT_FOR_UPDATER
+      ? { kind: "waiting", version: requested.version }
+      : { kind: "silent", version: requested.version };
+  }
+  if (!status) return null;
+  if (!FINAL_STATES.includes(status.state)) return { kind: "running", ...status };
+  return { kind: requested ? "result" : "last", ...status };
+};
+
+const provenance = (verified) =>
+  typeof verified === "boolean"
+    ? el(
+        "span",
+        { class: `chip ${verified ? "ok" : "warn"}` },
+        el("span", { class: "chip-label", text: "Provenance" }),
+        el("span", { class: "chip-value", text: verified ? "verified" : "not checked" })
+      )
+    : null;
+
+const stepper = (state) => {
+  const reached = STEPS.findIndex(([step]) => step === state);
+  return el(
+    "ol",
+    { class: "steps" },
+    STEPS.map(([step, label], i) => {
+      const where = i < reached ? "done" : i === reached ? "current" : "todo";
+      return el(
+        "li",
+        { class: `step ${where}`, "aria-current": where === "current" ? "step" : null },
+        el("span", { class: "step-marker", "aria-hidden": "true" }),
+        el("span", { text: label }),
+        where === "done" ? el("span", { class: "visually-hidden", text: " (done)" }) : null
+      );
+    })
+  );
+};
+
+const statusNodes = (view) => {
+  const message = view.message ? el("p", { class: "status-message", text: view.message }) : null;
+  switch (view.kind) {
+    case "waiting":
+      return [
+        el(
+          "div",
+          { class: "status-head" },
+          el("span", { class: "pulse", "aria-hidden": "true" }),
+          el("b", { class: "status-text", text: "Request sent — waiting for the updater…" })
+        ),
+        el("p", { class: "status-message", text: `Installing ${view.version}: the updater usually starts within seconds.` }),
+        stepper("queued"),
+      ];
+    case "silent":
+      return [
+        el(
+          "div",
+          { class: "status-head" },
+          el("b", { class: "status-text", text: "No answer from the updater after 2 minutes" })
+        ),
+        el(
+          "p",
+          { class: "status-message" },
+          `The request for ${view.version} is still waiting. On the host, check that the updater runs: `,
+          el("code", { text: "systemctl status fastmemo-updater.path" }),
+          " and its log, ",
+          el("code", { text: "sudo journalctl -u fastmemo-updater" }),
+          "."
+        ),
+      ];
+    case "running":
+      return [
+        el(
+          "div",
+          { class: "status-head" },
+          el("span", { class: "spinner", "aria-hidden": "true" }),
+          el("b", { class: "status-text", text: `Installing ${view.version}` }),
+          provenance(view.verified)
+        ),
+        message,
+        stepper(view.state),
+      ];
+    case "result":
+      return [
+        el(
+          "div",
+          { class: "status-head" },
+          el("span", { class: `end-mark ${view.state}`, "aria-hidden": "true" }),
+          el("b", { class: "status-text", text: END_TEXT[view.state](view.version) }),
+          provenance(view.verified)
+        ),
+        message,
+      ];
+    default:
+      return [
+        el(
+          "div",
+          { class: "status-head" },
+          el("span", { class: `tone-dot ${END_TONE[view.state]}`, "aria-hidden": "true" }),
+          el(
+            "span",
+            { class: "status-text" },
+            "Last update: ",
+            el("b", { text: `${STATE_TEXT[view.state] ?? view.state} (${view.version})` }),
+            ` · ${new Date(view.at).toLocaleString()}`
+          ),
+          provenance(view.verified)
+        ),
+        message,
+      ];
+  }
+};
+
+const renderStatus = (view) => {
+  const box = $("update-status");
+  box.hidden = !view;
+  // Rebuilt only when it changes: the page refreshes every 10 s and a screen reader would read it out again.
+  const key = JSON.stringify(view);
+  if (key === lastStatusKey) return;
+  lastStatusKey = key;
+  if (!view) {
+    box.replaceChildren();
+    return;
+  }
+  const tone = view.kind === "silent" ? "warn" : view.kind === "result" ? END_TONE[view.state] : "";
+  box.className = `update-status ${view.kind} ${tone}`;
+  box.replaceChildren(...statusNodes(view).filter(Boolean));
+};
+
+const versionFacts = (u) => {
+  const fact = (label, ...value) => el("div", {}, el("dt", { text: label }), el("dd", {}, ...value));
+  const latest = u.latest
+    ? [
+        el("span", { text: u.latest }),
+        el("span", {
+          class: `badge ${u.security ? "badge-security" : "badge-update"}`,
+          text: u.security ? "Security update" : "Update",
+        }),
+      ]
+    : u.checkedAt && !u.error
+      ? el("span", { class: "ok-text", text: "Up to date" })
+      : "—";
+  return el(
+    "dl",
+    { class: "versions" },
+    fact("Running", u.current),
+    fact("Latest", latest),
+    fact("Last check", u.checkedAt ? ago(u.checkedAt) : "not done yet")
+  );
+};
+
+const renderRelease = (r) =>
+  el(
+    "article",
+    { class: `release ${r.security ? "security" : ""}` },
+    el(
+      "div",
+      { class: "release-head" },
+      el(
+        "h3",
+        {},
+        el("span", { text: r.version }),
+        r.security ? el("span", { class: "badge badge-security", text: "Security" }) : null
+      ),
+      el(
+        "div",
+        { class: "release-meta" },
+        r.publishedAt ? el("span", { text: new Date(r.publishedAt).toLocaleDateString() }) : null,
+        r.url.startsWith("https://")
+          ? el("a", { href: r.url, rel: "noopener noreferrer", target: "_blank", text: "Release page ↗" })
+          : null
+      )
+    ),
+    el("div", { class: "release-body" }, ...renderNotes(r.notes))
+  );
+
 const renderUpdates = (u) => {
   lastUpdates = u;
   const badge = $("update-badge");
@@ -374,67 +614,34 @@ const renderUpdates = (u) => {
 
   const off = !u.enabled;
   const pending = u.releases.length > 0;
-  const status = off ? null : u.status;
-  const running = !!status && !FINAL_STATES.includes(status.state);
+  const view = statusView(u);
+  const busy = view?.kind === "running" || view?.kind === "waiting";
   const canInstall = !off && u.installable && u.sameMajor && !!u.latest;
 
   const line = $("updates-line");
   if (off) {
-    line.replaceChildren("Update checks are off (UPDATE_CHECK).");
+    line.replaceChildren(el("p", { text: "Update checks are off (UPDATE_CHECK)." }));
   } else {
-    const lines = [
-      el("div", {
-        text: `Running ${u.current} · ${u.latest ? `latest ${u.latest}` : "no newer version"} · last check ${u.checkedAt ? ago(u.checkedAt) : "not done yet"}`,
-      }),
-    ];
-    if (u.error) lines.push(el("div", { class: "error", text: `The last check failed: ${u.error}` }));
+    const lines = [versionFacts(u)];
+    if (u.error) lines.push(el("p", { class: "error", text: `The last check failed: ${u.error}` }));
     line.replaceChildren(...lines);
   }
 
   $("update-check").hidden = off;
   const install = $("update-install");
   install.hidden = !canInstall;
-  install.disabled = running;
+  install.disabled = busy;
   if (canInstall) install.textContent = `Install ${u.latest}`;
 
-  const statusBox = $("update-status");
-  statusBox.hidden = !status;
-  if (status) {
-    statusBox.replaceChildren(
-      ...[
-        el("b", { text: `${STATE_TEXT[status.state] ?? status.state} (${status.version})` }),
-        status.message ? ` · ${status.message}` : null,
-        status.verified === true ? el("span", { class: "pill ok", text: "Provenance verified" }) : null,
-        status.verified === false ? el("span", { class: "pill warn", text: "Provenance not checked" }) : null,
-      ].filter(Boolean)
-    );
-    statusBox.className = `update-status ${status.state === "done" ? "ok" : FINAL_STATES.includes(status.state) ? "bad" : ""}`;
-  }
+  renderStatus(view);
 
   // The notes are redrawn only when they change: the page refreshes every 10 s and would reset the scroll.
   const notesBox = $("update-notes");
   notesBox.hidden = off || !pending;
-  const notesKey = off ? "" : u.releases.map((r) => `${r.version}:${r.notes.length}`).join(",");
+  const notesKey = off ? "" : JSON.stringify(u.releases);
   if (notesKey !== lastNotesKey) {
     lastNotesKey = notesKey;
-    notesBox.replaceChildren(
-      ...u.releases.map((r) =>
-        el(
-          "article",
-          { class: "release" },
-          el(
-            "h3",
-            {},
-            r.version,
-            r.security ? el("span", { class: "badge badge-security", text: "Security" }) : null,
-            r.url.startsWith("https://")
-              ? el("a", { href: r.url, rel: "noopener noreferrer", target: "_blank", text: "Release page" })
-              : null
-          ),
-          ...renderNotes(r.notes)
-        )
-      )
-    );
+    notesBox.replaceChildren(...u.releases.map(renderRelease));
   }
 
   const commands = $("update-commands");
@@ -461,8 +668,11 @@ const loadUpdates = async () => {
   try {
     renderUpdates(await api("GET", "/updates"));
   } catch (e) {
-    // The last answer stays; only a wrong key matters here.
     if (e instanceof AuthError) throw e;
+    // The last answer stays; without one, a line says so instead of an empty card.
+    if (!lastUpdates) {
+      $("updates-line").replaceChildren(el("p", { class: "muted", text: "Couldn't load update information — retrying" }));
+    }
   }
 };
 
@@ -595,8 +805,11 @@ $("update-install").addEventListener("click", async () => {
   if (!confirm(message)) return;
   const button = $("update-install");
   button.disabled = true;
+  const statusAt = lastUpdates?.status?.at ?? -Infinity;
   try {
-    renderUpdates(await api("POST", "/updates/install", { body: { version } }));
+    const info = await api("POST", "/updates/install", { body: { version } });
+    requested = { version, at: Date.now(), statusAt };
+    renderUpdates(info);
     toast("Update asked: the updater picks it up in a few seconds");
   } catch (e) {
     toast(e.message);
