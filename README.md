@@ -10,7 +10,6 @@ container.**
 [![CI](https://github.com/ontech7/fastmemo-server/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ontech7/fastmemo-server/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ontech7/fastmemo-server/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/ontech7/fastmemo-server/actions/workflows/codeql.yml)
 [![Release](https://img.shields.io/github/v/release/ontech7/fastmemo-server?label=release&color=4f6bed)](CHANGELOG.md)
-![Tests](https://img.shields.io/badge/tests-SQLite%20%7C%20PostgreSQL-brightgreen)
 ![Provenance](https://img.shields.io/badge/releases-signed%20provenance-brightgreen) <br />
 ![Node](https://img.shields.io/badge/node-%E2%89%A524-339933?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
