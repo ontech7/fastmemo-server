@@ -6,8 +6,9 @@ undo a switch a power cut interrupted). The server only ever leaves a wish (a ve
 here is decided again:
 
 - from the request only a version number is read (no symlinks, no special files, a few bytes at most);
-- the server must be the published image on SQLite, its data in a volume at /data, as the running container shows
-  (PostgreSQL and source builds are updated by hand, with the commands the dashboard shows);
+- the server must be the published image on SQLite, its data in a volume at /data, started with the compose files
+  updater.env names, as the running container shows (PostgreSQL and source builds are updated by hand, with the
+  commands the dashboard shows);
 - the version must be newer than the running one, of the same major, and a published, non-prerelease release of the
   configured repo;
 - the downloaded image must say it was built from that repository for that version, and its build provenance is
@@ -78,6 +79,11 @@ DEFAULTS = {
 SOURCE_BUILD = "this server runs an image built from source: update it with the commands in the dashboard"
 NOT_PLAIN = "the database in the volume is not a plain file: update it with the commands in the dashboard"
 CHECK_THE_LOG = "check the updater's log (journalctl -u fastmemo-updater)"
+OTHER_FILES = (
+    "the server was started with other compose files than COMPOSE_FILE in updater.env: "
+    "update it with the commands in the dashboard"
+)
+NOT_VALID = "the updater's settings are not valid: check its log (journalctl -u fastmemo-updater)"
 
 
 class Refused(Exception):
@@ -88,23 +94,40 @@ class Failed(Exception):
     """A request that could not be carried out (final state "failed"), with a message safe to show."""
 
 
+class NotValid(Exception):
+    """updater.env can't be used. `found` holds what could be read of it (None if nothing), for the cleanup."""
+
+    def __init__(self, message, found=None):
+        super().__init__(message)
+        self.found = found
+
+
 class Stopped(SystemExit):
     """A stop signal (systemctl stop, a shutdown): the run ends with 128 + its number, as a killed process does."""
 
 
 def load_config(path):
-    info = os.stat(path, follow_symlinks=False)
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
-        sys.exit(f"{path} must be a regular file owned by this user and not writable by group or others")
+    unsafe = f"{path} must be a regular file owned by this user and not writable by group or others"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, encoding="utf-8") as file:
+            info = os.fstat(file.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise NotValid(unsafe)
+            text = file.read(MAX_ENV_BYTES)
+    except (OSError, UnicodeDecodeError) as error:
+        raise NotValid(f"{path} could not be read: {error}")
     config = dict(DEFAULTS)
-    with open(path, encoding="utf-8") as file:
-        for line in file:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, value = line.split("=", 1)
-                config[key.strip()] = value.strip().strip("'\"")
+    for line in text.split("\n"):
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            config[key.strip()] = value.strip().strip("'\"")
+    # Read all the same: its folders say where the request to remove is (see give_up).
+    if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        raise NotValid(unsafe, config)
     if not os.path.isabs(config.get("COMPOSE_DIR", "")):
-        sys.exit("COMPOSE_DIR must be set to the absolute path of the fastmemo-server checkout")
+        raise NotValid("COMPOSE_DIR must be set to the absolute path of the fastmemo-server checkout", config)
     if (
         not REPO.fullmatch(config["REPO"])
         or not IMAGE.fullmatch(config["IMAGE"])
@@ -114,8 +137,11 @@ def load_config(path):
         or not config["HEALTH_TIMEOUT"].isdigit()
         or not config["COOLDOWN"].isdigit()
         or config["VERIFY_PROVENANCE"] not in ("auto", "required", "off")
+        or not all(os.path.isabs(config[key]) for key in ("REQUEST_DIR", "STATUS_DIR", "BACKUP_DIR"))
     ):
-        sys.exit(f"{path} has a value that is not valid: compare it with updater.env.example")
+        raise NotValid(f"{path} has a value that is not valid: compare it with updater.env.example", config)
+    if not all(os.path.isdir(config[key]) for key in ("REQUEST_DIR", "STATUS_DIR")):
+        raise NotValid("REQUEST_DIR and STATUS_DIR are not valid: they must be folders that exist", config)
     # Relative to the checkout, like docker compose run from there.
     directory = config["COMPOSE_DIR"]
     config["COMPOSE_FILES"] = [os.path.join(directory, file) for file in config["COMPOSE_FILE"].split(":") if file]
@@ -372,11 +398,13 @@ def running_container(config):
             key, value = entry.split("=", 1)
             env[key] = value
     mounts = container.get("Mounts")
+    labels = settings.get("Labels")
     return {
         "image": settings.get("Image") if isinstance(settings.get("Image"), str) else "",
         "image_id": container.get("Image") if isinstance(container.get("Image"), str) else "",
         "env": env,
         "mounts": [m for m in mounts if isinstance(m, dict)] if isinstance(mounts, list) else [],
+        "labels": labels if isinstance(labels, dict) else {},
     }
 
 
@@ -430,7 +458,32 @@ def refuse(config, container):
         isinstance(version, str) and VERSION.fullmatch(version)
     ):
         raise Refused(SOURCE_BUILD)
+    if not started_with_these_files(config, container):
+        raise Refused(OTHER_FILES)
     return version
+
+
+def same_path(path):
+    """A path written another way (a trailing slash, ./, a symlinked folder) is the same file."""
+    return os.path.realpath(path)
+
+
+def started_with_these_files(config, container):
+    """Whether compose started the running server from COMPOSE_DIR with the files in COMPOSE_FILE, in any order.
+
+    Started with others (docker-compose.caddy.yml, while updater.env still names docker-compose.yml), the switch would
+    bring it up without its proxy or tunnel, or without the overlay: refused, not guessed.
+    """
+    files = container["labels"].get("com.docker.compose.project.config_files")
+    directory = container["labels"].get("com.docker.compose.project.working_dir")
+    if not isinstance(files, str) or not isinstance(directory, str) or not os.path.isabs(directory):
+        return False
+    started = [file for file in files.split(",") if file]
+    if not started or not all(os.path.isabs(file) for file in started):
+        return False
+    return same_path(directory) == same_path(config["COMPOSE_DIR"]) and {same_path(f) for f in started} == {
+        same_path(f) for f in config["COMPOSE_FILES"]
+    }
 
 
 def verify_image(config, status, version):
@@ -561,8 +614,12 @@ def database_files(data):
     return found
 
 
-def check_space(config, files):
-    if shutil.disk_usage(config["BACKUP_DIR"]).free < sum(files.values()) + SPARE_BYTES:
+def check_space(config, data, files):
+    size = sum(files.values())
+    # On the volume's own disk the copy shares the room with the second one a rollback stages next to the database.
+    if os.stat(config["BACKUP_DIR"]).st_dev == os.stat(data).st_dev:
+        size *= 2
+    if shutil.disk_usage(config["BACKUP_DIR"]).free < size + SPARE_BYTES:
         raise Failed("there is not enough free space to back up the database, nothing was changed")
 
 
@@ -586,7 +643,7 @@ def copy_plain(source, target):
 def back_up(config, data, current, line):
     """Copies the stopped server's database, with the image line it ran, to BACKUP_DIR/<time>-<version>/."""
     files = database_files(data)
-    check_space(config, files)
+    check_space(config, data, files)
     # UTC to the microsecond: sorts by age, and two runs never pick the same name.
     name = f"{datetime.datetime.now(datetime.timezone.utc):%Y%m%d-%H%M%S-%f}-{current}"
     folder = os.path.join(config["BACKUP_DIR"], name)
@@ -624,9 +681,10 @@ def prune(config, new):
 def restore(data, folder):
     """Puts the copied database back, each file with the mode and owner it had, whatever is in its place now.
 
-    All or nothing: every file is written next to its place and on the disk first. Only then are they renamed over
-    the live ones (a power cut during the renames is undone again by the next run), so a failure part-way never
-    leaves the database of one version with the WAL of the other.
+    The staging is all or nothing: every file is written next to its place and on the disk first, and a failure there
+    changes nothing in the volume. The renames over the live ones that follow are not: a power cut during them is
+    undone again by the next run (the switch marker is still there), and a rename that fails raises, so the status
+    says the database could not be put back and the log says why.
     """
     saved = {}
     for name in DATABASE_FILES:
@@ -793,7 +851,7 @@ def switch_to(config, status, switch, current, reference, volume):
     line = image_line(env_text)
     data = data_folder(config, volume)
     # Checked before anything stops; again once it has (the files may have grown).
-    check_space(config, database_files(data))
+    check_space(config, data, database_files(data))
     # Under systemd's ProtectSystem=strict a folder left out of ReadWritePaths is read-only: found out now, not once
     # the server is stopped.
     if not os.access(data, os.W_OK):
@@ -919,8 +977,37 @@ def stop_on_signal(signum, _):
     raise Stopped(128 + signum)
 
 
+def give_up(found):
+    """Settings it can't use: the request goes all the same, or the path unit would start this again and again, and the
+    dashboard is told instead of waiting for good. Only folders that were read as absolute paths are used."""
+
+    def folder(key):
+        value = (found or {}).get(key, "")
+        return value if os.path.isabs(value) and os.path.isdir(value) else DEFAULTS[key]
+
+    status = Status(folder("STATUS_DIR"))
+    try:
+        version = take_request(folder("REQUEST_DIR"))
+    except Failed:
+        version = status.version
+    except OSError as error:
+        log(f"the request could not be removed: {error}")
+        return
+    if version is None:
+        return
+    status.version = version
+    try:
+        status.write("failed", NOT_VALID)
+    except OSError as error:
+        log(f"the status could not be written: {error}")
+
+
 def main():
-    config = load_config(os.environ.get("FASTMEMO_UPDATER_CONFIG", "/etc/fastmemo/updater.env"))
+    try:
+        config = load_config(os.environ.get("FASTMEMO_UPDATER_CONFIG", "/etc/fastmemo/updater.env"))
+    except NotValid as error:
+        give_up(error.found)
+        sys.exit(f"fastmemo-updater: {error}")
     signal.signal(signal.SIGTERM, stop_on_signal)
     status = Status(config["STATUS_DIR"])
     try:

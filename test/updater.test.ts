@@ -93,6 +93,7 @@ if args[:2] == ["container", "inspect"]:
         "Config": {
             "Image": state.get("image", "${IMAGE}:1"),
             "Env": state.get("env", ["PATH=/usr/local/bin:/usr/bin", "NODE_ENV=production", "DATA_DIR=/data", "DATABASE_URL="]),
+            "Labels": state["containerLabels"],
         },
         "Mounts": state.get("mounts", [{
             "Type": "volume",
@@ -211,6 +212,16 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     fs.chmodSync(file, 0o644);
   }
 
+  const startedWith = (
+    files = [path.join(dirs.checkout, "docker-compose.yml"), path.join(dirs.checkout, "contrib/updater/compose.updater.yaml")],
+    directory: string | null = dirs.checkout
+  ): Record<string, string> => ({
+    "com.docker.compose.project": "fastmemo-server",
+    "com.docker.compose.service": "fastmemo",
+    ...(files ? { "com.docker.compose.project.config_files": files.join(",") } : {}),
+    ...(directory !== null ? { "com.docker.compose.project.working_dir": directory } : {}),
+  });
+
   const setState = (state: Record<string, unknown>) =>
     fs.writeFileSync(
       path.join(dirs.stub, "state.json"),
@@ -219,6 +230,8 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
         envFile: path.join(dirs.checkout, ".env"),
         volume: dirs.data,
         backupDir: dirs.backup,
+        // What compose records on the container it starts: by default the files updater.env names.
+        containerLabels: startedWith(),
         ...state,
       })
     );
@@ -309,15 +322,24 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     assert.deepEqual(calls(), []);
   });
 
+  /** Settings it can't use: nothing runs, but the request goes (the path unit would start it again and again) and the
+   * dashboard is told. */
+  const assertSettingsRefused = (result: { code: number }) => {
+    assert.notEqual(result.code, 0);
+    assert.deepEqual(calls(), []);
+    assert.equal(requestLeft(), false);
+    assert.deepEqual(
+      [status().state, status().version, status().message],
+      ["failed", "1.2.0", "the updater's settings are not valid: check its log (journalctl -u fastmemo-updater)"]
+    );
+  };
+
   test("refuses to run with a configuration others may write", async () => {
     fs.chmodSync(path.join(dirs.etc, "updater.env"), 0o664);
     request({ version: "1.2.0" });
     const result = await runUpdater();
-    assert.notEqual(result.code, 0);
     assert.match(result.stderr, /not writable by group or others/);
-    assert.deepEqual(calls(), []);
-    assert.equal(fs.existsSync(statusFile()), false);
-    assert.equal(requestLeft(), true);
+    assertSettingsRefused(result);
   });
 
   test("refuses to run without the checkout it updates", async () => {
@@ -325,8 +347,33 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace(/^COMPOSE_DIR=.*\n/m, ""));
     request({ version: "1.2.0" });
     const result = await runUpdater();
-    assert.notEqual(result.code, 0);
     assert.match(result.stderr, /COMPOSE_DIR/);
+    assertSettingsRefused(result);
+  });
+
+  test("refuses settings with a value that is not valid, or a status folder that isn't there", async () => {
+    const cases: Record<string, string>[] = [
+      { HEALTH_TIMEOUT: "soon" },
+      { BACKUP_DIR: "backup" },
+      { STATUS_DIR: path.join(root, "nowhere") },
+    ];
+    for (const extra of cases) {
+      writeConfig(extra);
+      request({ version: "1.2.0" });
+      const result = await runUpdater();
+      assert.match(result.stderr, /not valid/, JSON.stringify(extra));
+      assert.notEqual(result.code, 0);
+      assert.equal(requestLeft(), false, JSON.stringify(extra));
+      assert.deepEqual(calls(), []);
+      if (!extra.STATUS_DIR) assertSettingsRefused(result);
+    }
+  });
+
+  test("with settings it can't use and no request, writes no status", async () => {
+    fs.chmodSync(path.join(dirs.etc, "updater.env"), 0o666);
+    const result = await runUpdater();
+    assert.notEqual(result.code, 0);
+    assert.equal(fs.existsSync(statusFile()), false);
     assert.deepEqual(calls(), []);
   });
 
@@ -481,6 +528,45 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
       request({ version: "1.2.0" });
       await runUpdater();
       assert.deepEqual([status().state, status().message], ["done", null], image);
+    }
+  });
+
+  test("refuses a server started with other compose files than updater.env names", async () => {
+    const message =
+      "the server was started with other compose files than COMPOSE_FILE in updater.env: update it with the commands in the dashboard";
+    const files = [
+      path.join(dirs.checkout, "docker-compose.yml"),
+      path.join(dirs.checkout, "contrib/updater/compose.updater.yaml"),
+    ];
+    for (const containerLabels of [
+      {},
+      startedWith(undefined, null),
+      startedWith([files[0]!]),
+      startedWith([path.join(dirs.checkout, "docker-compose.caddy.yml"), files[1]!]),
+      startedWith([...files, path.join(dirs.checkout, "docker-compose.build.yml")]),
+      startedWith(files, path.join(root, "elsewhere")),
+      startedWith(["docker-compose.yml", "contrib/updater/compose.updater.yaml"]),
+      { ...startedWith(), "com.docker.compose.project.config_files": "" },
+    ]) {
+      setState({ containerLabels });
+      request({ version: "1.2.0" });
+      await runUpdater();
+      assert.deepEqual([status().state, status().message], ["refused", message], JSON.stringify(containerLabels));
+    }
+    assert.equal(pulled(), false);
+
+    // The same files in another order, or written another way, are the same setup.
+    for (const containerLabels of [
+      startedWith([files[1]!, files[0]!]),
+      startedWith(
+        [`${dirs.checkout}/./docker-compose.yml`, `${dirs.checkout}//contrib/updater/compose.updater.yaml`],
+        `${dirs.checkout}/`
+      ),
+    ]) {
+      setState({ containerLabels });
+      request({ version: "1.2.0" });
+      await runUpdater();
+      assert.deepEqual([status().state, status().message], ["done", null], JSON.stringify(containerLabels));
     }
   });
 
@@ -986,6 +1072,23 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     assert.deepEqual(backups(), []);
     assert.equal(env(), ENV);
     assert.equal(fs.existsSync(marker()), false);
+  });
+
+  test("on the volume's own disk, wants room for two copies (putting one back makes a second)", async () => {
+    // Sparse, and as big as the copy fits once but not twice. A safety net if the check is missing: the stop fails, so
+    // nothing gets copied for real.
+    const free = fs.statfsSync(dirs.backup);
+    fs.truncateSync(path.join(dirs.data, "fastmemo.db"), Math.floor(free.bavail * free.bsize * 0.7));
+    assert.equal(fs.statSync(dirs.backup).dev, fs.statSync(dirs.data).dev);
+    setState({ stopFails: ["old"] });
+    request({ version: "1.2.0" });
+    await runUpdater();
+    assert.deepEqual(
+      [status().state, status().message],
+      ["failed", "there is not enough free space to back up the database, nothing was changed"]
+    );
+    assert.equal(stopped(), false);
+    assert.deepEqual(backups(), []);
   });
 
   test("refuses a database in the volume that is a symlink, without stopping anything", async () => {
