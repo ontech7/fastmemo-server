@@ -75,8 +75,11 @@ commands to run by hand: a new major (2.0), PostgreSQL, an image built from sour
    256 MB). Else it fails, before anything is stopped.
 7. The server is stopped, the database (`fastmemo.db`, and `-wal` and `-shm` if present) is copied, the `FASTMEMO_IMAGE` line of
    `.env` is set to `ghcr.io/ontech7/fastmemo-server:<version>@sha256:<digest>`, and the server starts on it.
-8. It waits up to `HEALTH_TIMEOUT` seconds (120) for the container to be healthy. If it isn't, or the updater is stopped, or
-   Docker fails, the previous `.env` line and the database copy come back, and the previous version starts again.
+8. It waits up to `HEALTH_TIMEOUT` seconds (120) for the container to be healthy, and stops waiting when Docker reports it
+   `unhealthy` twice in a row (Docker says so only after the image's health check failed several times). If it isn't healthy, or
+   the updater is stopped, or Docker fails, the previous `.env` line and the database copy come back, and the previous version
+   starts again. Stopped by a signal (`systemctl stop`, a shutdown), the run puts the previous version back first, then ends
+   with exit code 143 and the line "stopped by a signal" in the journal.
 9. After a rollback, the server (the previous version, running again) asks every device for a full sync, once per rollback,
    within a minute of the status saying so. While the new version was waiting for its health check it was serving, and the notes
    it took went with it when the copy came back; the devices still have them and send back what changed since. Its log says

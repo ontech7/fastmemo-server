@@ -88,6 +88,10 @@ class Failed(Exception):
     """A request that could not be carried out (final state "failed"), with a message safe to show."""
 
 
+class Stopped(SystemExit):
+    """A stop signal (systemctl stop, a shutdown): the run ends with 128 + its number, as a killed process does."""
+
+
 def load_config(path):
     info = os.stat(path, follow_symlinks=False)
     if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
@@ -677,18 +681,29 @@ def start(config):
 
 
 def healthy(config):
-    """Waits up to HEALTH_TIMEOUT seconds for the image's HEALTHCHECK (on /v1/health) to pass."""
+    """Waits up to HEALTH_TIMEOUT seconds for the image's HEALTHCHECK (on /v1/health) to pass.
+
+    Docker says "starting" during the check's start period and "unhealthy" only after several failed checks: that is a
+    verdict, so the wait ends there (seen twice in a row, not on one flap) instead of serving a broken version for longer.
+    """
     deadline = time.monotonic() + int(config["HEALTH_TIMEOUT"])
+    unhealthy = 0
     while True:
         try:
             ids = compose(config, "ps", "-q", config["SERVICE"], check=False, timeout=60).stdout.split()
             if len(ids) == 1 and CONTAINER_ID.fullmatch(ids[0]):
                 health = ["container", "inspect", "--format", "{{.State.Health.Status}}", ids[0]]
                 found = run(config, *health, check=False, timeout=60)
-                if found.returncode == 0 and found.stdout.strip() == "healthy":
+                answer = found.stdout.strip() if found.returncode == 0 else None
+                if answer == "healthy":
                     return True
+                unhealthy = unhealthy + 1 if answer == "unhealthy" else 0
+                if unhealthy >= 2:
+                    return False
+            else:
+                unhealthy = 0
         except Failed:
-            pass
+            unhealthy = 0
         left = deadline - time.monotonic()
         if left <= 0:
             return False
@@ -817,6 +832,7 @@ def switch_to(config, status, switch, current, reference, volume):
             raise Failed("the database could not be backed up, nothing was changed")
         raise
 
+    stopped = False
     try:
         switch.save(record)
         status.write("restarting")
@@ -835,12 +851,16 @@ def switch_to(config, status, switch, current, reference, volume):
     except (Failed, OSError) as error:
         log(f"the switch failed: {error}")
         reason = "the new version could not be started"
-    except BaseException:
+    except BaseException as error:
         # Including the SystemExit a stop signal raises: the previous version comes back before leaving.
-        if not isinstance(sys.exc_info()[1], SystemExit):
+        if not isinstance(error, SystemExit):
             traceback.print_exc()
+        stopped = isinstance(error, Stopped)
         reason = "the update was interrupted"
     roll_back(config, status, switch, record, reason)
+    if stopped:
+        # Put back, the run still ends as a stop: systemd records it.
+        raise Stopped(128 + signal.SIGTERM)
 
 
 def update(config, status, switch):
@@ -896,14 +916,23 @@ def cool_down(config):
 def stop_on_signal(signum, _):
     # Once is enough: a second signal must not cut the rollback short.
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    raise SystemExit(f"stopped by signal {signum}")
+    raise Stopped(128 + signum)
 
 
 def main():
     config = load_config(os.environ.get("FASTMEMO_UPDATER_CONFIG", "/etc/fastmemo/updater.env"))
     signal.signal(signal.SIGTERM, stop_on_signal)
     status = Status(config["STATUS_DIR"])
-    switch = Switch(config)
+    try:
+        run_once(config, status, Switch(config))
+    except Stopped:
+        # A rollback that was asked to stop finished first: one line for the journal, and the exit code says it stopped.
+        put_back = ", the previous version was put back" if status.state == "rolled_back" else ""
+        log(f"stopped by a signal{put_back}")
+        raise
+
+
+def run_once(config, status, switch):
     os.makedirs(config["BACKUP_DIR"], mode=0o700, exist_ok=True)
     # One run at a time: the path unit and the boot run can start together.
     with open(os.path.join(config["BACKUP_DIR"], ".lock"), "w") as lock:

@@ -77,7 +77,14 @@ if args[:2] == ["container", "inspect"] and "{{.State.Running}}" in args:
     print(state.get("running", "true"))
     sys.exit(0)
 if args[:2] == ["container", "inspect"] and "{{.State.Health.Status}}" in args:
-    print(state.get("health", {}).get(running, "healthy"))
+    health = state.get("health", {}).get(running, "healthy")
+    if isinstance(health, list):
+        # One answer per poll, the last one from then on.
+        polls = os.path.join(state_dir, f"polls-{running}")
+        count = len(open(polls).read()) if os.path.exists(polls) else 0
+        open(polls, "a").write(".")
+        health = health[min(count, len(health) - 1)]
+    print(health)
     sys.exit(0)
 if args[:2] == ["container", "inspect"]:
     print(json.dumps([{
@@ -819,6 +826,30 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     assert.equal(backups().length, 1);
   });
 
+  test("stops waiting once the new version is reported unhealthy twice in a row", async () => {
+    writeConfig({ HEALTH_TIMEOUT: "60" });
+    setState({ health: { new: ["starting", "unhealthy", "unhealthy"] }, migrate: true });
+    request({ version: "1.2.0" });
+    const started = Date.now();
+    assert.equal((await runUpdater()).code, 0);
+    assert.ok(Date.now() - started < 30_000, "not the whole timeout");
+    assert.deepEqual(
+      [status().state, status().message],
+      ["rolled_back", "the new version did not become healthy; the previous version is running again"]
+    );
+    assert.equal(calls().filter((call) => isHealth(call) && call.image === PINNED).length, 3);
+    assertDatabaseBack();
+  });
+
+  test("a single unhealthy answer is not a verdict", async () => {
+    writeConfig({ HEALTH_TIMEOUT: "60" });
+    setState({ health: { new: ["unhealthy", "healthy"] }, migrate: true });
+    request({ version: "1.2.0" });
+    assert.equal((await runUpdater()).code, 0);
+    assert.equal(status().state, "done");
+    assert.equal(env(), `FASTMEMO_ACCESS_KEY=0123456789abcdef\n${PINNED}\nTZ=Europe/Rome\n`);
+  });
+
   test("rolls back when the new version can't be started", async () => {
     setState({ upFails: ["new"] });
     request({ version: "1.2.0" });
@@ -987,7 +1018,10 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     await until(() => calls().some(isHealth));
     assert.ok(calls().some(isHealth));
     child.kill("SIGTERM");
-    await done;
+    const result = await done;
+    // systemd records the stop, and the journal says what came of it.
+    assert.equal(result.code, 143);
+    assert.equal(result.stderr, "fastmemo-updater: stopped by a signal, the previous version was put back\n");
     assert.deepEqual(
       [status().state, status().message, status().verified],
       ["rolled_back", "the update was interrupted; the previous version is running again", false]
@@ -1006,7 +1040,8 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     await until(() => calls().some((call) => isHealth(call) && call.image === "FASTMEMO_IMAGE="));
     child.kill("SIGTERM");
     const result = await done;
-    assert.notEqual(result.code, 0);
+    assert.equal(result.code, 143);
+    assert.ok(result.stderr.endsWith("fastmemo-updater: stopped by a signal, the previous version was put back\n"));
     assert.deepEqual(
       [status().state, status().message],
       [
