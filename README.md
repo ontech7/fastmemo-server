@@ -296,7 +296,8 @@ again by itself:
   every update says "verified" or "not checked". `VERIFY_PROVENANCE=required` makes the check mandatory;
 - the database is copied first (if there isn't room for the copy, the update stops and nothing changes), and if the new version
   is not healthy within two minutes, or the run is stopped half-way, the previous image and database come back. An update a
-  power cut interrupted is undone at the next boot.
+  power cut interrupted is undone at the next boot. If an update is rolled back, the server asks your devices to send their
+  recent changes again.
 
 <details>
 <summary><strong>Install the updater</strong></summary>

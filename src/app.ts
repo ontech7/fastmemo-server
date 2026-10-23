@@ -31,6 +31,8 @@ export interface App {
   limiter: AuthLimiter;
   /** Resolves with the port it listens on (0 picks a free one). */
   listen(port: number, host?: string): Promise<number>;
+  /** Asks every device for a full sync when the updater's last run ended with a rollback not handled yet. */
+  checkRollback(): Promise<void>;
   /** Answers the waiting long polls, stops accepting requests, writes what's in memory. */
   close(): Promise<void>;
 }
@@ -120,6 +122,13 @@ export const createApp = (options: AppOptions): App => {
           resolve(typeof address === "object" && address ? address.port : port);
         });
       }),
+    checkRollback: async () => {
+      const status = options.updates?.status();
+      if (status?.state !== "rolled_back") return;
+      if ((await service.fullSyncAfterRollback(status.at)) !== null) {
+        log.warn("update rolled back: asked every device for a full sync", { version: status.version });
+      }
+    },
     close: async () => {
       hub.close();
       await new Promise<void>((resolve) => {

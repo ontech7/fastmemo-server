@@ -4,10 +4,10 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, mock, test } from "node:test";
+import { after, afterEach, describe, mock, test } from "node:test";
 
-import { silenceLogs } from "../src/log.ts";
-import { ACCESS_KEY, ADMIN_KEY, startServer } from "./helpers.ts";
+import { onRecord, silenceLogs } from "../src/log.ts";
+import { ACCESS_KEY, ADMIN_KEY, openTestDb, PG_URL, startServer, type TestServer } from "./helpers.ts";
 import {
   compareVersions,
   githubReleases,
@@ -690,5 +690,95 @@ describe("the updater's status and install request", () => {
         await server.close();
       }
     });
+  });
+});
+
+describe("a rolled-back update", () => {
+  // The updater put back the database copy from before the switch: what devices sent to the new version meanwhile is gone.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fastmemo-rollback-"));
+  const file = path.join(dir, "test.db");
+  const statusDir = path.join(dir, "status");
+  fs.mkdirSync(statusDir);
+  const writeStatus = (state: string, at: number) =>
+    fs.writeFileSync(path.join(statusDir, "status.json"), JSON.stringify({ state, version: "1.2.0", message: null, at }));
+  const updater = () =>
+    new Updates({
+      current: "1.1.0",
+      fetchReleases: async () => [],
+      enabled: false,
+      requestDir: null,
+      statusDir,
+      sqlite: true,
+    });
+  const warnings: string[] = [];
+  onRecord((record) => warnings.push(record.message));
+  const asked = () => warnings.filter((message) => message === "update rolled back: asked every device for a full sync");
+
+  let server: TestServer;
+  const tokens: Record<string, string> = {};
+  /** Whether A and B are asked for a full sync; then each says it ran it (the flag clears). */
+  const due = async () => {
+    const devices: { uuid: string; fullSyncDue: number | null }[] = (
+      await server.call("GET", "/v1/devices", { token: tokens.A })
+    ).body.devices;
+    const asked = [];
+    for (const uuid of ["A", "B"]) {
+      const device = devices.find((each) => each.uuid === uuid)!;
+      asked.push(device.fullSyncDue !== null);
+      if (device.fullSyncDue !== null) {
+        await server.call("POST", `/v1/devices/${uuid}/full-sync-done`, {
+          token: tokens[uuid],
+          body: { due: device.fullSyncDue },
+        });
+      }
+    }
+    return asked;
+  };
+
+  after(async () => {
+    await server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("asks every device for a full sync once per rollback, and only after a rollback", async () => {
+    // A fresh database first (on Postgres, emptied), the same one for the restart below.
+    server = await startServer({}, PG_URL ? await openTestDb() : await openTestDb(file), { updates: updater() });
+    tokens.A = await server.register("A");
+    tokens.B = await server.register("B");
+
+    await server.app.checkRollback();
+    assert.deepEqual(await due(), [false, false], "no status: nothing to do");
+    for (const state of ["restarting", "done", "failed", "refused"]) {
+      writeStatus(state, Date.now());
+      await server.app.checkRollback();
+      assert.deepEqual(await due(), [false, false], state);
+    }
+
+    const at = Date.now();
+    writeStatus("rolled_back", at);
+    await server.app.checkRollback();
+    assert.deepEqual(await due(), [true, true]);
+    assert.equal(asked().length, 1);
+    await server.app.checkRollback();
+    await server.app.checkRollback();
+    assert.deepEqual(await due(), [false, false], "the same rollback is handled once");
+    assert.equal(asked().length, 1);
+
+    writeStatus("rolled_back", at + 1000);
+    await server.app.checkRollback();
+    assert.deepEqual(await due(), [true, true], "a later rollback asks again");
+    assert.equal(asked().length, 2);
+    writeStatus("rolled_back", at);
+    await server.app.checkRollback();
+    assert.deepEqual(await due(), [false, false], "an older one doesn't");
+    writeStatus("rolled_back", at + 1000);
+  });
+
+  test("a restart doesn't ask again for a rollback already handled", async () => {
+    await server.close();
+    server = await startServer({}, await openTestDb(file), { updates: updater() });
+    await server.app.checkRollback();
+    assert.deepEqual(await due(), [false, false]);
+    assert.equal(asked().length, 2);
   });
 });

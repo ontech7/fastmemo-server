@@ -12,6 +12,7 @@ import { githubReleases, Updates } from "./updates.ts";
 
 const FLUSH_MS = 10_000;
 const MAINTENANCE_MS = 60 * 60 * 1000;
+const ROLLBACK_CHECK_MS = 60_000;
 
 const version: string = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -85,6 +86,10 @@ const main = async () => {
   const firstMaintenance = setTimeout(maintain, 60_000);
   const sweep = setInterval(() => app.limiter.sweep(), 5 * 60_000);
   updates.start();
+  // The updater writes its rollback once the previous version (this one) is running again: looked for soon, then every minute.
+  const checkRollback = () => app.checkRollback().catch((e) => log.error("rollback check failed", { error: e }));
+  const rollbackChecks = config.updateStatusDir ? setInterval(checkRollback, ROLLBACK_CHECK_MS).unref() : undefined;
+  const firstRollbackCheck = config.updateStatusDir ? setTimeout(checkRollback, 5000).unref() : undefined;
 
   let stopping = false;
   const shutdown = async (signal: string) => {
@@ -94,6 +99,8 @@ const main = async () => {
     setTimeout(() => process.exit(1), 10_000).unref();
     [flush, maintenance, sweep].forEach(clearInterval);
     clearTimeout(firstMaintenance);
+    clearInterval(rollbackChecks);
+    clearTimeout(firstRollbackCheck);
     updates.stop();
     await app.close();
     await db.close();

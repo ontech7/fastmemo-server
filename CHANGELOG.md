@@ -14,7 +14,8 @@ uses [Semantic Versioning](https://semver.org/).
   by itself, copies the database, switches to the new image pinned by digest, and goes back to the previous image and database
   if the new version is not healthy (or if a power cut interrupts it). SQLite, the same major version and the published image
   only; PostgreSQL and source builds show the commands to run. Build provenance is verified when the GitHub CLI and a token are
-  there (`VERIFY_PROVENANCE`).
+  there (`VERIFY_PROVENANCE`). After a rollback the server asks every device for a full sync, so the notes written to the new
+  version meanwhile come back.
 - Releases are built natively for `linux/amd64` and `linux/arm64`, signed with a build provenance attestation, and published as
   `:1.1.0`, `:1.1`, `:1` and `:latest`, with the notes of this changelog on the GitHub release.
 - Tests on every push (SQLite and PostgreSQL), a multi-arch image build, CodeQL and Dependabot.

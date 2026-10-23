@@ -283,6 +283,29 @@ export class Service {
     return changed;
   }
 
+  /**
+   * After a rolled-back update: the updater put back the database copy from before the switch, so what devices sent to the
+   * new version meanwhile is gone from here. Every device is asked for a full sync (it sends back what changed since),
+   * once per rollback: `at` is the rollback's time, kept in meta so a restart doesn't ask again. Null when already done.
+   */
+  async fullSyncAfterRollback(at: number): Promise<number | null> {
+    const now = Date.now();
+    const changed = await this.db.write(async (sql) => {
+      const row = await sql.get<{ value: string }>(`SELECT value FROM meta WHERE key = 'rollback_full_sync_at'`);
+      if (row && Number(row.value) >= at) return null;
+      await sql.run(
+        `INSERT INTO meta (key, value) VALUES ('rollback_full_sync_at', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+        [String(at)]
+      );
+      return sql.run(`UPDATE devices SET full_sync_due = ?`, [now]);
+    });
+    if (changed) {
+      this.stats.count("writes", changed);
+      this.changed();
+    }
+    return changed;
+  }
+
   // --- Sync ---
 
   /** Waits until something changed since `version` (a long poll), at most `ms`. */
