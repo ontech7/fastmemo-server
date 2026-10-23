@@ -47,8 +47,14 @@ jobs:
         if: github.ref_type == 'tag'
         run: |
           version="${GITHUB_REF_NAME#v}"
-          if ! awk -v v="$version" 'index($0, "## [" v "]") == 1 { found = 1 } END { exit !found }' CHANGELOG.md; then
+          header="$(awk -v v="$version" 'index($0, "## [" v "]") == 1 { print; exit }' CHANGELOG.md)"
+          if [ -z "$header" ]; then
             echo "::error::CHANGELOG.md has no \"## [$version]\" section: write the release notes before tagging"
+            exit 1
+          fi
+          # "## [1.2.3] - unreleased" is the section being written: a tag is the day it gets its date.
+          if printf '%s\n' "$header" | grep -qi unreleased; then
+            echo "::error::The CHANGELOG.md section \"$header\" says unreleased: date the CHANGELOG section before tagging"
             exit 1
           fi
 
