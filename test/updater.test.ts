@@ -268,7 +268,7 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     const done = new Promise<{ code: number; stderr: string }>((resolve) => {
       child = execFile(
         PYTHON,
-        direct ? ["-I", UPDATER] : ["-I", "-c", WITH_DEFAULTS, UPDATER, defaults],
+        direct ? ["-I", "-B", UPDATER] : ["-I", "-B", "-c", WITH_DEFAULTS, UPDATER, defaults],
         {
           // Only what is given here: no GH_TOKEN or real docker/gh from the developer's environment.
           env: {

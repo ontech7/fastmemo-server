@@ -313,7 +313,8 @@ The commands copy the updater in place, tell it where your server's folder is an
 file), let it write in that folder (it keeps `.env` up to date), start it, and start the server with the extra file:
 
 ```sh
-FILE=docker-compose.yml   # or docker-compose.caddy.yml / docker-compose.cloudflare.yml / docker-compose.tailscale.yml — the one you started the server with
+# or docker-compose.caddy.yml / docker-compose.cloudflare.yml / docker-compose.tailscale.yml — the one you started the server with
+FILE=docker-compose.yml
 sudo install -m 0755 -D contrib/updater/fastmemo-updater.py /usr/local/lib/fastmemo/fastmemo-updater.py
 sudo install -m 0644 -D contrib/updater/updater.env.example /etc/fastmemo/updater.env
 sudo install -m 0644 contrib/updater/fastmemo-updater.path contrib/updater/fastmemo-updater.service /etc/systemd/system/

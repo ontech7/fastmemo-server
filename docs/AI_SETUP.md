@@ -233,7 +233,8 @@ access key, which every device holds, opens the dashboard and its **Install** bu
 updater refuses to switch a server started with other files than `updater.env` names.
 
 ```sh
-FILE=docker-compose.yml   # or docker-compose.caddy.yml / docker-compose.cloudflare.yml / docker-compose.tailscale.yml — the one you started the server with
+# or docker-compose.caddy.yml / docker-compose.cloudflare.yml / docker-compose.tailscale.yml — the one you started the server with
+FILE=docker-compose.yml
 sudo install -m 0755 -D contrib/updater/fastmemo-updater.py /usr/local/lib/fastmemo/fastmemo-updater.py
 sudo install -m 0644 -D contrib/updater/updater.env.example /etc/fastmemo/updater.env
 sudo install -m 0644 contrib/updater/fastmemo-updater.path contrib/updater/fastmemo-updater.service /etc/systemd/system/
