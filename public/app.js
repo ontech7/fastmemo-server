@@ -453,7 +453,7 @@ const stepper = (state) => {
   return el(
     "ol",
     { class: "steps" },
-    STEPS.map(([step, label], i) => {
+    STEPS.map(([, label], i) => {
       const where = i < reached ? "done" : i === reached ? "current" : "todo";
       return el(
         "li",
@@ -650,8 +650,9 @@ const renderUpdates = (u) => {
   if (showCommands) {
     const major = u.latest.split(".")[0];
     // The image line is for .env (docker compose reads it from there): pasted in a shell it would change nothing.
+    // An image the updater pinned in .env would win over the pull: it has to go first.
     $("update-commands-text").textContent = u.sameMajor
-      ? "This setup can't be updated from here."
+      ? `This setup can't be updated from here. If your .env has a FASTMEMO_IMAGE line, change it to ghcr.io/ontech7/fastmemo-server:${u.latest} (or delete the line) first.`
       : "This is a new major version: read the notes above first. Then put this line in the .env file (replacing any FASTMEMO_IMAGE line):";
     $("update-env-pre").hidden = u.sameMajor;
     $("update-env-pre").textContent = `FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:${major}`;

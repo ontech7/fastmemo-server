@@ -210,8 +210,10 @@ Tell the person, in plain words:
 5. **Backups**: the dashboard's **Download a backup** button, or the script in the [README](../README.md#backups-and-restore). A
    backup holds the titles and the device list: keep it private.
 6. **Updating**: the dashboard shows when a newer version is out (it asks GitHub every 6 hours; `UPDATE_CHECK=off` stops that).
-   By hand, in the `fastmemo-server` folder: `git pull`, then `docker compose pull && docker compose up -d`. If
-   `docker compose pull` fails (`denied`, `not found`), build the new version from the folder instead, with
+   By hand, in the `fastmemo-server` folder: `git pull`, then `docker compose pull && docker compose up -d`. If `.env` has a
+   `FASTMEMO_IMAGE=...@sha256:...` line (the updater pins one), change it first to the new version in full, for example
+   `FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:1.1.0`, or delete it. If `docker compose pull` fails (`denied`, `not found`),
+   build the new version from the folder instead, with
    `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build` (the same two files for every command after
    it). With the updater from [step 7](#7-optional-one-click-updates), the dashboard's **Install** button does it. A new major
    version (2.0) is always by hand: read its notes first.
@@ -226,9 +228,12 @@ with the published image (not `docker-compose.build.yml`). Else skip it: the per
 
 First set `FASTMEMO_ADMIN_KEY` in `.env` (another `openssl rand -hex 24`, tell the person it opens the dashboard): otherwise the
 access key, which every device holds, opens the dashboard and its **Install** button. Then, in the server's folder (the one with
-`.env`; `COMPOSE_FILE` is the compose file you use, relative to it, then the overlay, separated by `:`):
+`.env`), in one shell: set `FILE` to the compose file the server was started with. It goes, with the overlay after it, in
+`updater.env` and in the folder's `.env` (`COMPOSE_FILE`), so every plain `docker compose ...` there keeps the overlay; the
+updater refuses to switch a server started with other files than `updater.env` names.
 
 ```sh
+FILE=docker-compose.yml   # or docker-compose.caddy.yml / docker-compose.cloudflare.yml / docker-compose.tailscale.yml — the one you started the server with
 sudo install -m 0755 -D contrib/updater/fastmemo-updater.py /usr/local/lib/fastmemo/fastmemo-updater.py
 sudo install -m 0644 -D contrib/updater/updater.env.example /etc/fastmemo/updater.env
 sudo install -m 0644 contrib/updater/fastmemo-updater.path contrib/updater/fastmemo-updater.service /etc/systemd/system/
@@ -236,17 +241,18 @@ sudo install -d -o 1000 -g 1000 -m 0750 /var/lib/fastmemo-update/request
 sudo install -d -m 0755 /var/lib/fastmemo-update/status
 sudo install -d -m 0700 /var/lib/fastmemo-update/backup /var/lib/fastmemo-update/docker /var/lib/fastmemo-update/gh
 sudo sed -i "s|^COMPOSE_DIR=.*|COMPOSE_DIR=$PWD|" /etc/fastmemo/updater.env
-sudo sed -i "s|^COMPOSE_FILE=.*|COMPOSE_FILE=docker-compose.yml:contrib/updater/compose.updater.yaml|" /etc/fastmemo/updater.env
+sudo sed -i "s|^COMPOSE_FILE=.*|COMPOSE_FILE=${FILE}:contrib/updater/compose.updater.yaml|" /etc/fastmemo/updater.env
+printf '\nCOMPOSE_FILE=%s:contrib/updater/compose.updater.yaml\n' "$FILE" >> .env
 sudo mkdir -p /etc/systemd/system/fastmemo-updater.service.d
 printf '[Service]\nReadWritePaths=%s\n' "$PWD" | sudo tee /etc/systemd/system/fastmemo-updater.service.d/checkout.conf
 sudo systemctl daemon-reload
 sudo systemctl enable fastmemo-updater.service
 sudo systemctl enable --now fastmemo-updater.path
-docker compose -f docker-compose.yml -f contrib/updater/compose.updater.yaml up -d
+docker compose -f "$FILE" -f contrib/updater/compose.updater.yaml up -d
 ```
 
-- With another compose file (`docker-compose.caddy.yml`, ...), put it in place of `docker-compose.yml` in the last line and in
-  the `COMPOSE_FILE` line (the overlay stays last), and use the same pair of `-f` for every `docker compose` command after.
+- From then on, plain `docker compose ...` in that folder uses both files (the `COMPOSE_FILE` line in `.env`). To change setup
+  later, change both `COMPOSE_FILE` lines (`.env` and `updater.env`) together.
 - Docker keeps its data elsewhere than `/var/lib/docker` (`docker info --format '{{.DockerRootDir}}'` prints another folder, or
   `/var/lib/docker` is a symlink, as with an SSD on a Raspberry Pi)? Add `ReadWritePaths=<that folder>/volumes` as a second line
   of `checkout.conf`, then `sudo systemctl daemon-reload`.
@@ -261,7 +267,7 @@ Check it:
 ```sh
 systemctl is-active fastmemo-updater.path         # active
 systemctl is-enabled fastmemo-updater.service     # enabled
-docker compose -f docker-compose.yml -f contrib/updater/compose.updater.yaml ps   # fastmemo: "Up ... (healthy)"
+docker compose ps                                 # fastmemo: "Up ... (healthy)"
 curl -fsS -H "Authorization: Bearer <the admin key>" http://127.0.0.1:<port>/admin/api/updates   # ..."installable":true...
 ```
 

@@ -61,7 +61,9 @@ commands to run by hand: a new major (2.0), PostgreSQL, an image built from sour
 
 1. The request is a small plain file with a version like `1.2.3`. Anything else fails.
 2. The server is running as a container of the published image (`ghcr.io/ontech7/fastmemo-server`, any tag), with its database
-   in a Docker volume mounted at `/data`, on SQLite. Else it is refused.
+   in a Docker volume mounted at `/data`, on SQLite, started from `COMPOSE_DIR` with the files `COMPOSE_FILE` names (any order:
+   compose records them on the container). Else it is refused: switched with other files, a server behind Caddy or a tunnel
+   would come back without it.
 3. The version is newer than the running one, has the same major, and is a published, final release (not a draft or a
    pre-release) of the repository on GitHub.
 4. It pulls `ghcr.io/ontech7/fastmemo-server:<version>`; the image must say it was built from this repository, for that version.
@@ -72,7 +74,8 @@ commands to run by hand: a new major (2.0), PostgreSQL, an image built from sour
    checked**. With `auto` and no `gh`, an update goes ahead on the strength of the steps above only: the image comes from this
    repository's package on GHCR over HTTPS, and says so. If you want the signature checked every time, use `required`.
 6. The data folder and `.env` must be writable by the service, and there must be room for a copy of the database (its size plus
-   256 MB). Else it fails, before anything is stopped.
+   256 MB, or twice its size plus 256 MB when the backup folder is on the volume's disk: putting the copy back makes a second
+   one next to the database). Else it fails, before anything is stopped.
 7. The server is stopped, the database (`fastmemo.db`, and `-wal` and `-shm` if present) is copied, the `FASTMEMO_IMAGE` line of
    `.env` is set to `ghcr.io/ontech7/fastmemo-server:<version>@sha256:<digest>`, and the server starts on it.
 8. It waits up to `HEALTH_TIMEOUT` seconds (120) for the container to be healthy, and stops waiting when Docker reports it
@@ -80,10 +83,11 @@ commands to run by hand: a new major (2.0), PostgreSQL, an image built from sour
    the updater is stopped, or Docker fails, the previous `.env` line and the database copy come back, and the previous version
    starts again. Stopped by a signal (`systemctl stop`, a shutdown), the run puts the previous version back first, then ends
    with exit code 143 and the line "stopped by a signal" in the journal.
-9. After a rollback, the server (the previous version, running again) asks every device for a full sync, once per rollback,
-   within a minute of the status saying so. While the new version was waiting for its health check it was serving, and the notes
-   it took went with it when the copy came back; the devices still have them and send back what changed since. Its log says
-   "update rolled back: asked every device for a full sync".
+9. After a rollback (or a failed run, which may have put the copy back too), the server asks every device for a full sync, once
+   per run, within a minute of the status saying so. While the new version was waiting for its health check it was serving, and
+   the notes it took went with it when the copy came back; the devices still have them and send their recent notes back. A
+   device connected for the first time during that update is unknown to the copy: connect it again (**Settings → Cloud Sync**).
+   Its log says "the database may be a copy from before an update: asked every device for a full sync".
 
 ### Installing it
 
@@ -99,23 +103,24 @@ The commands are in the [README](../README.md#updates). Why each one:
 | `/var/lib/fastmemo-update/backup`, `docker`, `gh`, 0700        | Database copies; Docker's and the GitHub CLI's config for the service (so it never uses yours).                                |
 | `/etc/fastmemo/updater.secret`, root, 0600                     | Optional: `GH_TOKEN=<a token with no scopes>`, for the provenance check.                                                       |
 | `/etc/systemd/system/fastmemo-updater.service.d/checkout.conf` | `ReadWritePaths=<your server's folder>`: the service is sandboxed (`ProtectSystem=strict`) and must write the folder's `.env`. |
+| `COMPOSE_FILE=<your compose file>:contrib/...` in `.env`       | Compose reads it from the folder's `.env`: a plain `docker compose ...` keeps the overlay (an explicit `-f` still wins).       |
 
 Create the folders **before** you start the server with `contrib/updater/compose.updater.yaml`: Docker would otherwise create
 the request folder owned by root, and the server couldn't write to it (the **Install** button would then fail).
 
 **`/etc/fastmemo/updater.env`** (the file is commented; `updater.env.example` has every key):
 
-| Key                                              | Default                                                   | What it does                                                                                                        |
-| ------------------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `COMPOSE_DIR`                                    | none: required                                            | Your server's folder (absolute path), where you run `docker compose`.                                               |
-| `COMPOSE_FILE`                                   | `docker-compose.yml:contrib/updater/compose.updater.yaml` | The compose files you start the server with, relative to `COMPOSE_DIR`, separated by `:`. Keep the second one last. |
-| `ENV_FILE`                                       | `COMPOSE_DIR/.env`                                        | The `.env` used with them. `FASTMEMO_IMAGE` is the only line the updater changes in it.                             |
-| `SERVICE`                                        | `fastmemo`                                                | The server's service in the compose files.                                                                          |
-| `HEALTH_TIMEOUT`                                 | `120`                                                     | Seconds the new version has to become healthy. A slow Raspberry Pi may need `300`.                                  |
-| `COOLDOWN`                                       | `15`                                                      | Seconds between two runs.                                                                                           |
-| `VERIFY_PROVENANCE`                              | `auto`                                                    | `auto`, `required` (fail without `gh` and a token) or `off`.                                                        |
-| `REPO`, `IMAGE`, `SIGNER_WORKFLOW`, `GITHUB_API` | this repository                                           | For a fork that publishes its own image.                                                                            |
-| `REQUEST_DIR`, `STATUS_DIR`, `BACKUP_DIR`        | `/var/lib/fastmemo-update/...`                            | The folders above.                                                                                                  |
+| Key                                              | Default                                                   | What it does                                                                                                                                           |
+| ------------------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `COMPOSE_DIR`                                    | none: required                                            | Your server's folder (absolute path), where you run `docker compose`.                                                                                  |
+| `COMPOSE_FILE`                                   | `docker-compose.yml:contrib/updater/compose.updater.yaml` | The compose files you start the server with, relative to `COMPOSE_DIR`, separated by `:`. Keep the overlay last. The same as `COMPOSE_FILE` in `.env`. |
+| `ENV_FILE`                                       | `COMPOSE_DIR/.env`                                        | The `.env` used with them. `FASTMEMO_IMAGE` is the only line the updater changes in it.                                                                |
+| `SERVICE`                                        | `fastmemo`                                                | The server's service in the compose files.                                                                                                             |
+| `HEALTH_TIMEOUT`                                 | `120`                                                     | Seconds the new version has to become healthy. A slow Raspberry Pi may need `300`.                                                                     |
+| `COOLDOWN`                                       | `15`                                                      | Seconds between two runs.                                                                                                                              |
+| `VERIFY_PROVENANCE`                              | `auto`                                                    | `auto`, `required` (fail without `gh` and a token) or `off`.                                                                                           |
+| `REPO`, `IMAGE`, `SIGNER_WORKFLOW`, `GITHUB_API` | this repository                                           | For a fork that publishes its own image.                                                                                                               |
+| `REQUEST_DIR`, `STATUS_DIR`, `BACKUP_DIR`        | `/var/lib/fastmemo-update/...`                            | The folders above.                                                                                                                                     |
 
 After a change to `updater.env`, nothing needs restarting: it is read at every run. After a change to the service or its
 drop-in, run `sudo systemctl daemon-reload`.
@@ -144,23 +149,23 @@ Without it, the update stops before anything is touched, with "the updater can't
 and a later `docker compose pull && docker compose up -d` doesn't move it. Update from the dashboard, or delete that line to
 follow the newest `1.x` again.
 
-To stop using the updater: `sudo systemctl disable --now fastmemo-updater.path fastmemo-updater.service`, then start the server
-without `contrib/updater/compose.updater.yaml`.
+To stop using the updater: `sudo systemctl disable --now fastmemo-updater.path fastmemo-updater.service`, delete the
+`COMPOSE_FILE` line from `.env`, then start the server without `contrib/updater/compose.updater.yaml`.
 
 ### What the status says
 
 The dashboard shows the last run's status (until the next run):
 
-| Status                                                                                                   | What it means                                                                                                                                                                                                                                                                                                                                                                        |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Checking the release, Downloading the new version, Verifying the image                                   | The first steps above.                                                                                                                                                                                                                                                                                                                                                               |
-| Copying the database                                                                                     | The server is stopped while the database is copied: a few seconds for a small database.                                                                                                                                                                                                                                                                                              |
-| Restarting on the new version                                                                            | The new version is starting; it waits for the healthy check.                                                                                                                                                                                                                                                                                                                         |
-| **Updated**                                                                                              | Done: the new version is healthy.                                                                                                                                                                                                                                                                                                                                                    |
-| **Rolled back to the previous version**                                                                  | The new version didn't become healthy (or the run was interrupted), so the previous image and database are back. The message says why. If it adds "not healthy yet: check the containers", the previous version was started but hadn't passed its health check yet: look at `docker compose ps`. The server asks every device for a full sync, so nothing written meanwhile is lost. |
-| **Refused**                                                                                              | The request is something one click doesn't do: PostgreSQL, a source build, another major, an older version. Nothing was touched. The message says which. Use the commands in the dashboard.                                                                                                                                                                                          |
-| **Failed**                                                                                               | The update didn't happen: usually nothing was changed ("nothing was changed" in the message): GitHub or Docker couldn't be reached, the image or its provenance didn't match, no room for the copy, the service can't write. Try again, or read the log.                                                                                                                             |
-| Failed: "could not be undone completely", "the database could not be put back" or "could not be stopped" | A rollback step failed. Read the log, then check `docker compose ps`, the `FASTMEMO_IMAGE` line of `.env` and the backup (below). If the message says the new version was started again, that version runs on its own, already migrated, database: the copy is in the backup folder.                                                                                                 |
+| Status                                                                                                   | What it means                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Checking the release, Downloading the new version, Verifying the image                                   | The first steps above.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Copying the database                                                                                     | The server is stopped while the database is copied: a few seconds for a small database.                                                                                                                                                                                                                                                                                                                                                                                     |
+| Restarting on the new version                                                                            | The new version is starting; it waits for the healthy check.                                                                                                                                                                                                                                                                                                                                                                                                                |
+| **Updated**                                                                                              | Done: the new version is healthy.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Rolled back to the previous version**                                                                  | The new version didn't become healthy (or the run was interrupted), so the previous image and database are back. The message says why. If it adds "not healthy yet: check the containers", the previous version was started but hadn't passed its health check yet: look at `docker compose ps`. The server asks every device for a full sync: the devices send their recent notes back. A device connected for the first time during the update has to be connected again. |
+| **Refused**                                                                                              | The request is something one click doesn't do: PostgreSQL, a source build, another major, an older version, a server started with other compose files than `updater.env` names. Nothing was touched. The message says which. Use the commands in the dashboard.                                                                                                                                                                                                             |
+| **Failed**                                                                                               | The update didn't happen: usually nothing was changed ("nothing was changed" in the message): GitHub or Docker couldn't be reached, the image or its provenance didn't match, no room for the copy, the service can't write, its settings are not valid. Try again, or read the log.                                                                                                                                                                                        |
+| Failed: "could not be undone completely", "the database could not be put back" or "could not be stopped" | A rollback step failed. Read the log, then check `docker compose ps`, the `FASTMEMO_IMAGE` line of `.env` and the backup (below). If the message says the new version was started again, that version runs on its own, already migrated, database: the copy is in the backup folder.                                                                                                                                                                                        |
 
 ### The log
 
@@ -203,8 +208,20 @@ device for a full sync** in the dashboard and the devices send them back.
   newer release of the same major. Look at `docker inspect fastmemo-server` for the mounts at `/updates/request` and
   `/updates/status`.
 - **"An update is already waiting for the updater", and nothing happens.** The watcher isn't running, or doesn't see the file:
-  `systemctl status fastmemo-updater.path`, then `sudo journalctl -u fastmemo-updater`. If a `request.json` is left in
-  `/var/lib/fastmemo-update/request` from long ago, delete it.
+  `systemctl status fastmemo-updater.path`, then `sudo journalctl -u fastmemo-updater`. A request left for over an hour no
+  longer blocks: the next **Install** replaces it.
+- **"The updater's settings are not valid".** `updater.env` has a value it can't use, or a folder that isn't there: the journal
+  says which. It removed the request, so nothing runs again until you click **Install** once it is fixed.
+- **"Refused": started with other compose files than COMPOSE_FILE in updater.env.** `COMPOSE_FILE` in `updater.env` must name
+  the files the server was started with, in `COMPOSE_DIR`
+  (`docker inspect fastmemo-server --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}'` shows them).
+  Put the same list in `updater.env` and in `.env`'s `COMPOSE_FILE`, then `docker compose up -d`.
+- **"docker compose failed" while the same command works for you.** The service runs with
+  `DOCKER_CONFIG=/var/lib/fastmemo-update/docker`, so a Compose plugin installed only in your `~/.docker/cli-plugins` isn't
+  found. Install the system one (the `docker-compose-plugin` package, or Docker from get.docker.com), or copy yours to
+  `/usr/local/lib/docker/cli-plugins/`.
+- **Other folders.** `REQUEST_DIR` and `STATUS_DIR` in `updater.env`, the two mounts in `contrib/updater/compose.updater.yaml`
+  and the `PathExists=` line of `fastmemo-updater.path` name the same folders: change them all together, or none.
 - **"Refused": the database is not in a volume mounted at /data**, or the image "was built from source". A bind mount, a custom
   `DATA_DIR` or `DATABASE_URL`, and `docker-compose.build.yml` are all updated by hand.
 - **Fails at once with "the updater can't write the checkout's .env".** The drop-in is missing or names another folder

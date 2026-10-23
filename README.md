@@ -279,8 +279,9 @@ With another compose file, add `-f <file>` to each command. The compose files ru
 (2.0) means reading its notes first. Then set `FASTMEMO_IMAGE` in `.env`, for example
 `FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:2`. The database is upgraded on start. If `docker compose pull` fails, or you
 changed the code, [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#the-image) shows how to build it from source. Once the updater has put
-a `FASTMEMO_IMAGE=...@sha256:...` line in `.env`, updating by hand means setting `FASTMEMO_IMAGE` to the new version (or
-clearing it) before `docker compose pull && docker compose up -d`.
+a `FASTMEMO_IMAGE=...@sha256:...` line in `.env`, updating by hand means changing that line to the new version first, in full,
+for example `FASTMEMO_IMAGE=ghcr.io/ontech7/fastmemo-server:1.1.0` (or deleting the line), then
+`docker compose pull && docker compose up -d`.
 
 **With one click**, if you install the optional updater on the host: the dashboard's **Install** button does the same, safely,
 and shows its progress. It works for SQLite, for the published image, and for the same major version (a new major, PostgreSQL
@@ -303,35 +304,36 @@ again by itself:
 <summary><strong>Install the updater</strong></summary>
 
 You need Linux with systemd and Python 3 (a Raspberry Pi or a VPS, say), and the server started with `docker compose` from a
-cloned folder (not Coolify). Read [`contrib/updater`](contrib/updater) first: it runs as root. In the server's folder:
+cloned folder (not Coolify). Read [`contrib/updater`](contrib/updater) first: it runs as root. Set `FASTMEMO_ADMIN_KEY` in
+`.env` first: otherwise the access key, which every device holds, opens the dashboard and its **Install** button.
+
+In the server's folder, in one terminal (the commands use `$FILE`), set `FILE` to the compose file you started the server with.
+The commands copy the updater in place, tell it where your server's folder is and which compose files it uses (in
+`/etc/fastmemo/updater.env`, and in the folder's `.env`, so every plain `docker compose ...` there keeps the updater's extra
+file), let it write in that folder (it keeps `.env` up to date), start it, and start the server with the extra file:
 
 ```sh
+FILE=docker-compose.yml   # or docker-compose.caddy.yml / docker-compose.cloudflare.yml / docker-compose.tailscale.yml — the one you started the server with
 sudo install -m 0755 -D contrib/updater/fastmemo-updater.py /usr/local/lib/fastmemo/fastmemo-updater.py
 sudo install -m 0644 -D contrib/updater/updater.env.example /etc/fastmemo/updater.env
 sudo install -m 0644 contrib/updater/fastmemo-updater.path contrib/updater/fastmemo-updater.service /etc/systemd/system/
 sudo install -d -o 1000 -g 1000 -m 0750 /var/lib/fastmemo-update/request
 sudo install -d -m 0755 /var/lib/fastmemo-update/status
 sudo install -d -m 0700 /var/lib/fastmemo-update/backup /var/lib/fastmemo-update/docker /var/lib/fastmemo-update/gh
-```
-
-Then tell it where your server's folder is. Open `/etc/fastmemo/updater.env` (`sudo nano /etc/fastmemo/updater.env`) and set
-`COMPOSE_DIR` to this folder (the line `pwd` prints), and `COMPOSE_FILE` to the compose files you start the server with, in
-order and separated by `:` (the default is `docker-compose.yml:contrib/updater/compose.updater.yaml`). Let the service write in
-that folder (it keeps `.env` up to date), start it, and start the server with the updater's extra compose file:
-
-```sh
+sudo sed -i "s|^COMPOSE_DIR=.*|COMPOSE_DIR=$PWD|" /etc/fastmemo/updater.env
+sudo sed -i "s|^COMPOSE_FILE=.*|COMPOSE_FILE=${FILE}:contrib/updater/compose.updater.yaml|" /etc/fastmemo/updater.env
+printf '\nCOMPOSE_FILE=%s:contrib/updater/compose.updater.yaml\n' "$FILE" >> .env
 sudo mkdir -p /etc/systemd/system/fastmemo-updater.service.d
 printf '[Service]\nReadWritePaths=%s\n' "$PWD" | sudo tee /etc/systemd/system/fastmemo-updater.service.d/checkout.conf
 sudo systemctl daemon-reload
 sudo systemctl enable fastmemo-updater.service
 sudo systemctl enable --now fastmemo-updater.path
-docker compose -f docker-compose.yml -f contrib/updater/compose.updater.yaml up -d
+docker compose -f "$FILE" -f contrib/updater/compose.updater.yaml up -d
 ```
 
-With another compose file than `docker-compose.yml` (Caddy, Cloudflare, Tailscale), put it first in place of
-`docker-compose.yml`, here and in `COMPOSE_FILE`, and use the same pair of `-f` for every later command. Set
-`FASTMEMO_ADMIN_KEY` in `.env` as well: otherwise the access key, which every device holds, opens the dashboard and its
-**Install** button.
+From then on `docker compose pull`, `up -d`, `logs` and the rest work as before in that folder: the `COMPOSE_FILE` line in
+`.env` adds the updater's file. The updater refuses to switch a server started with other compose files than the ones in
+`updater.env` (it would come back without its proxy or tunnel): to change setup, change both `COMPOSE_FILE` lines.
 
 For the provenance check, install a recent [GitHub CLI](https://cli.github.com) (`gh`, 2.49 or newer) and put a token with **no
 scopes** (**GitHub → Settings → Developer settings → Personal access tokens**, no boxes ticked) in a file only root reads:
