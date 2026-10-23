@@ -8,6 +8,10 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    # The types follow the Node line the server runs (engines, Dockerfile): a new major moves with Node, by hand.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     target-branch: dev
@@ -18,3 +22,7 @@ updates:
     target-branch: dev
     schedule:
       interval: weekly
+    # Node majors are moved by hand, once the new line is LTS (with engines, @types/node and the docs).
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
