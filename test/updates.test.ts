@@ -150,6 +150,71 @@ describe("the release check", () => {
     assert.equal(calls, 2);
   });
 
+  test("maybeCheck tries again 15 minutes after a failed check", async () => {
+    let calls = 0;
+    let fail = true;
+    let time = 1_000;
+    const u = new Updates({
+      current: "1.0.0",
+      fetchReleases: async () => {
+        calls++;
+        if (fail) throw new Error("GitHub answered 503");
+        return RELEASES;
+      },
+      enabled: true,
+      requestDir: null,
+      statusDir: null,
+      sqlite: true,
+      now: () => time,
+    });
+    u.maybeCheck();
+    await settle();
+    assert.equal(calls, 1);
+    time += 14 * 60 * 1000;
+    u.maybeCheck();
+    await settle();
+    assert.equal(calls, 1);
+    time += 2 * 60 * 1000;
+    fail = false;
+    u.maybeCheck();
+    await settle();
+    assert.equal(calls, 2);
+    // A good answer: back to every 6 hours.
+    time += 60 * 60 * 1000;
+    u.maybeCheck();
+    await settle();
+    assert.equal(calls, 2);
+  });
+
+  test("start tries again 15 minutes after a failed check, and every 6 h after a good one", async () => {
+    mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    let calls = 0;
+    let fail = true;
+    const u = updates("1.0.0", async () => {
+      calls++;
+      if (fail) throw new Error("GitHub answered 503");
+      return RELEASES;
+    });
+    u.start();
+    mock.timers.tick(30_000);
+    assert.equal(calls, 1);
+    await settle();
+    mock.timers.tick(15 * 60 * 1000 - 1);
+    assert.equal(calls, 1);
+    fail = false;
+    mock.timers.tick(1);
+    assert.equal(calls, 2);
+    await settle();
+    mock.timers.tick(15 * 60 * 1000);
+    assert.equal(calls, 2);
+    mock.timers.tick(6 * 60 * 60 * 1000);
+    assert.equal(calls, 3);
+    await settle();
+    u.stop();
+    mock.timers.tick(12 * 60 * 60 * 1000);
+    assert.equal(calls, 3);
+  });
+
   test("start checks after 30 s, then every 6 h, until stopped", async () => {
     mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
     let calls = 0;
@@ -492,6 +557,31 @@ describe("the updater's status and install request", () => {
       u.requestInstall("1.2.0");
     });
 
+    test("a request left for over an hour, or one it can't read, no longer blocks: it is replaced", async () => {
+      let time = NOW;
+      const { u, requestDir } = installable("1.0.0", RELEASES, { now: () => time });
+      await u.check();
+      const file = path.join(requestDir!, "request.json");
+      u.requestInstall("1.2.0");
+      time += 60 * 60 * 1000;
+      refused(u, "1.2.0", 409, "in_progress");
+      time += 1;
+      u.requestInstall("1.2.0");
+      assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).requestedAt, time);
+
+      for (const left of ["{nope", "[]", JSON.stringify({ version: "1.2.0" }), JSON.stringify({ requestedAt: "x" })]) {
+        fs.writeFileSync(file, left);
+        u.requestInstall("1.2.0");
+        assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).requestedAt, time, left);
+      }
+      // From further ahead than a clock may drift: it would block for good otherwise.
+      fs.writeFileSync(file, JSON.stringify({ version: "1.2.0", requestedAt: time + 10 * 60 * 1000 }));
+      u.requestInstall("1.2.0");
+      fs.writeFileSync(file, JSON.stringify({ version: "1.2.0", requestedAt: time + 60 * 1000 }));
+      refused(u, "1.2.0", 409, "in_progress");
+      assert.deepEqual(fs.readdirSync(requestDir!), ["request.json"]);
+    });
+
     test("another major is never installed with a click", async () => {
       const { u } = installable("1.0.0", [release("2.0.0")]);
       await u.check();
@@ -712,7 +802,10 @@ describe("a rolled-back update", () => {
     });
   const warnings: string[] = [];
   onRecord((record) => warnings.push(record.message));
-  const asked = () => warnings.filter((message) => message === "update rolled back: asked every device for a full sync");
+  const asked = () =>
+    warnings.filter(
+      (message) => message === "the database may be a copy from before an update: asked every device for a full sync"
+    );
 
   let server: TestServer;
   const tokens: Record<string, string> = {};
@@ -748,7 +841,7 @@ describe("a rolled-back update", () => {
 
     await server.app.checkRollback();
     assert.deepEqual(await due(), [false, false], "no status: nothing to do");
-    for (const state of ["restarting", "done", "failed", "refused"]) {
+    for (const state of ["restarting", "done", "refused"]) {
       writeStatus(state, Date.now());
       await server.app.checkRollback();
       assert.deepEqual(await due(), [false, false], state);
@@ -771,7 +864,15 @@ describe("a rolled-back update", () => {
     writeStatus("rolled_back", at);
     await server.app.checkRollback();
     assert.deepEqual(await due(), [false, false], "an older one doesn't");
-    writeStatus("rolled_back", at + 1000);
+
+    // A run that "could not be undone completely" may have put the copy back all the same.
+    writeStatus("failed", at + 2000);
+    await server.app.checkRollback();
+    assert.deepEqual(await due(), [true, true], "a later failure asks too");
+    assert.equal(asked().length, 3);
+    await server.app.checkRollback();
+    assert.deepEqual(await due(), [false, false], "the same failure is handled once");
+    writeStatus("rolled_back", at + 2000);
   });
 
   test("a restart doesn't ask again for a rollback already handled", async () => {
@@ -779,6 +880,14 @@ describe("a rolled-back update", () => {
     server = await startServer({}, await openTestDb(file), { updates: updater() });
     await server.app.checkRollback();
     assert.deepEqual(await due(), [false, false]);
-    assert.equal(asked().length, 2);
+    assert.equal(asked().length, 3);
+  });
+
+  test("says nothing when there was no device to ask", async () => {
+    await server.close();
+    server = await startServer({}, await openTestDb(), { updates: updater() });
+    writeStatus("rolled_back", Date.now() + 10_000);
+    await server.app.checkRollback();
+    assert.equal(asked().length, 3);
   });
 });

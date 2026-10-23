@@ -15,12 +15,18 @@ import { HttpError } from "./model.ts";
 export const VERSION = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/;
 
 const CHECK_EVERY = 6 * 60 * 60 * 1000;
+/** After a failed check (GitHub down, rate-limited, no network yet): soon again, not in 6 h. */
+const RETRY_AFTER = 15 * 60 * 1000;
 const FIRST_CHECK_AFTER = 30 * 1000;
 const FETCH_TIMEOUT = 10_000;
 const MAX_RELEASES = 30;
 const MAX_NOTES = 8000;
 const MAX_ERROR = 200;
 const MAX_STATUS_BYTES = 4096;
+/** The updater reads at most this much of a request. */
+const MAX_REQUEST_BYTES = 1024;
+/** A request the updater hasn't picked up in this long never will be (it isn't running): a new one may replace it. */
+const STALE_REQUEST = 60 * 60 * 1000;
 /** An updater killed mid-way never writes a final state: past this it is not coming back. */
 const STALE_STATUS = 60 * 60 * 1000;
 /** A status from further ahead than this is a clock gone wrong: it must not block installs for good. */
@@ -123,6 +129,30 @@ const isDirectory = (dir: string): boolean => {
   }
 };
 
+/** Opens a file in a folder shared with the updater: never through a symlink, never blocking on a FIFO. */
+const openShared = (file: string): number =>
+  fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+
+/** Whether request.json is a request the updater may still pick up: a small file, left less than an hour ago. */
+const waitingRequest = (file: string, now: number): boolean => {
+  try {
+    const fd = openShared(file);
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.size > MAX_REQUEST_BYTES) return false;
+      const { requestedAt } = JSON.parse(fs.readFileSync(fd, "utf8")) ?? {};
+      if (typeof requestedAt !== "number" || !Number.isFinite(requestedAt)) return false;
+      const age = now - requestedAt;
+      return age <= STALE_REQUEST && age >= -MAX_CLOCK_SKEW;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // None, or one that can't be read: either way nothing blocks a new one.
+    return false;
+  }
+};
+
 /** The status file's content if it is what the updater writes, else null (the file is not ours to trust). */
 const parseStatus = (value: unknown): UpdateStatus | null => {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -183,8 +213,9 @@ export class Updates {
   private checking: Promise<void> | null = null;
   /** Versions already announced in the log, so a recheck every 6 h stays quiet. */
   private readonly announced = new Set<string>();
-  private first: NodeJS.Timeout | null = null;
-  private every: NodeJS.Timeout | null = null;
+  private timer: NodeJS.Timeout | null = null;
+  /** Bumped by start() and stop(): a check that ends after them doesn't schedule the next one. */
+  private schedule = 0;
 
   constructor(options: UpdatesOptions) {
     this.options = options;
@@ -206,27 +237,36 @@ export class Updates {
     return this.checking;
   }
 
-  /** Checks in the background when the last check is old: the dashboard calls it on every view. */
-  maybeCheck(): void {
-    if (this.options.enabled && (this.checkedAt === null || this.now() - this.checkedAt > CHECK_EVERY)) void this.check();
+  /** How long after a check the next one is due: soon after a failed one. */
+  private get interval(): number {
+    return this.error ? RETRY_AFTER : CHECK_EVERY;
   }
 
-  /** The first check after 30 s (not at boot: the host may have no network yet), then every 6 h. */
+  /** Checks in the background when the last check is old: the dashboard calls it on every view. */
+  maybeCheck(): void {
+    if (this.options.enabled && (this.checkedAt === null || this.now() - this.checkedAt > this.interval)) void this.check();
+  }
+
+  /** The first check after 30 s (not at boot: the host may have no network yet), then every 6 h (15 min after a failure). */
   start(): void {
     this.stop();
     if (!this.options.enabled) return;
-    this.first = setTimeout(() => {
-      void this.check();
-      this.every = setInterval(() => void this.check(), CHECK_EVERY);
-      this.every.unref();
-    }, FIRST_CHECK_AFTER);
-    this.first.unref();
+    const schedule = this.schedule;
+    const next = (ms: number) => {
+      this.timer = setTimeout(() => {
+        void this.check().then(() => {
+          if (schedule === this.schedule) next(this.interval);
+        });
+      }, ms);
+      this.timer.unref();
+    };
+    next(FIRST_CHECK_AFTER);
   }
 
   stop(): void {
-    if (this.first) clearTimeout(this.first);
-    if (this.every) clearInterval(this.every);
-    this.first = this.every = null;
+    this.schedule++;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
   }
 
   /** Newer than the running version, newest first. Empty unless the running version is a plain x.y.z. */
@@ -256,8 +296,7 @@ export class Updates {
     if (!statusDir) return null;
     try {
       // The directory is the updater's; a symlink there could point anywhere, and a FIFO would hang the open.
-      const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
-      const fd = fs.openSync(path.join(statusDir, "status.json"), flags);
+      const fd = openShared(path.join(statusDir, "status.json"));
       try {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.size > MAX_STATUS_BYTES) return null;
@@ -289,8 +328,9 @@ export class Updates {
     }
 
     const { requestDir } = this.options;
-    // The updater removes request.json when it picks it up: while it is there, the same install is already queued.
-    if (fs.existsSync(path.join(requestDir!, "request.json"))) {
+    // The updater removes request.json when it picks it up: while it is there, the same install is already queued. One
+    // left for over an hour (the updater isn't running) or that can't be read is replaced, or it would block for good.
+    if (waitingRequest(path.join(requestDir!, "request.json"), this.now())) {
       throw new HttpError(409, "in_progress", "An update is already waiting for the updater");
     }
     const temporary = path.join(requestDir!, `.request-${crypto.randomBytes(8).toString("hex")}`);

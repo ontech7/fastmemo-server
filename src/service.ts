@@ -284,9 +284,10 @@ export class Service {
   }
 
   /**
-   * After a rolled-back update: the updater put back the database copy from before the switch, so what devices sent to the
-   * new version meanwhile is gone from here. Every device is asked for a full sync (it sends back what changed since),
-   * once per rollback: `at` is the rollback's time, kept in meta so a restart doesn't ask again. Null when already done.
+   * After a rolled-back (or failed) update: the updater may have put back the database copy from before the switch, so what
+   * devices sent to the new version meanwhile is gone from here. Every device is asked for a full sync (it sends back what
+   * changed since), once per run: `at` is the status's time, kept in meta so a restart doesn't ask again. Returns how many
+   * devices were asked, null when already done.
    */
   async fullSyncAfterRollback(at: number): Promise<number | null> {
     const now = Date.now();
