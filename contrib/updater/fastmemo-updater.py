@@ -84,6 +84,7 @@ OTHER_FILES = (
     "update it with the commands in the dashboard"
 )
 NOT_VALID = "the updater's settings are not valid: check its log (journalctl -u fastmemo-updater)"
+NOT_STARTED = "the updater could not start: check its log (journalctl -u fastmemo-updater)"
 
 
 class Refused(Exception):
@@ -95,7 +96,8 @@ class Failed(Exception):
 
 
 class NotValid(Exception):
-    """updater.env can't be used. `found` holds what could be read of it (None if nothing), for the cleanup."""
+    """updater.env can't be used. `found` holds its values when the file itself can be trusted (owned by this user, not
+    writable by others) and only a value is wrong; else None, and the cleanup uses the built-in folders only."""
 
     def __init__(self, message, found=None):
         super().__init__(message)
@@ -117,15 +119,15 @@ def load_config(path):
             text = file.read(MAX_ENV_BYTES)
     except (OSError, UnicodeDecodeError) as error:
         raise NotValid(f"{path} could not be read: {error}")
+    # Someone else may have written it, folders included: none of it is used, not even for the cleanup.
+    if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        raise NotValid(unsafe)
     config = dict(DEFAULTS)
     for line in text.split("\n"):
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)
             config[key.strip()] = value.strip().strip("'\"")
-    # Read all the same: its folders say where the request to remove is (see give_up).
-    if info.st_uid != os.geteuid() or info.st_mode & 0o022:
-        raise NotValid(unsafe, config)
     if not os.path.isabs(config.get("COMPOSE_DIR", "")):
         raise NotValid("COMPOSE_DIR must be set to the absolute path of the fastmemo-server checkout", config)
     if (
@@ -977,29 +979,39 @@ def stop_on_signal(signum, _):
     raise Stopped(128 + signum)
 
 
-def give_up(found):
-    """Settings it can't use: the request goes all the same, or the path unit would start this again and again, and the
-    dashboard is told instead of waiting for good. Only folders that were read as absolute paths are used."""
-
-    def folder(key):
-        value = (found or {}).get(key, "")
-        return value if os.path.isabs(value) and os.path.isdir(value) else DEFAULTS[key]
-
-    status = Status(folder("STATUS_DIR"))
+def consume_request(request_dir, status, message):
+    """A run that can't go on takes the request all the same (or the path unit would start it again and again) and says
+    so in a failed status, instead of leaving the dashboard waiting for good. Nothing without a request, and a final
+    status this run already wrote (a rollback's) stays."""
     try:
-        version = take_request(folder("REQUEST_DIR"))
+        version = take_request(request_dir)
     except Failed:
         version = status.version
     except OSError as error:
         log(f"the request could not be removed: {error}")
         return
-    if version is None:
+    if version is None or status.final:
         return
     status.version = version
     try:
-        status.write("failed", NOT_VALID)
+        status.write("failed", message)
     except OSError as error:
         log(f"the status could not be written: {error}")
+
+
+def give_up(found):
+    """Settings it can't use. The folders of trusted settings are used when they are real folders (not symlinks), else
+    the built-in ones."""
+
+    def folder(key):
+        value = (found or {}).get(key, "")
+        try:
+            real = os.path.isabs(value) and stat.S_ISDIR(os.lstat(value).st_mode)
+        except OSError:
+            real = False
+        return value if real else DEFAULTS[key]
+
+    consume_request(folder("REQUEST_DIR"), Status(folder("STATUS_DIR")), NOT_VALID)
 
 
 def main():
@@ -1019,12 +1031,29 @@ def main():
         raise
 
 
+def not_started(config, status):
+    """A failure before the request was taken (no BACKUP_DIR, no lock, a recovery that broke): it is taken all the
+    same."""
+    log("could not start:")
+    traceback.print_exc()
+    consume_request(config["REQUEST_DIR"], status, NOT_STARTED)
+    sys.exit(1)
+
+
 def run_once(config, status, switch):
-    os.makedirs(config["BACKUP_DIR"], mode=0o700, exist_ok=True)
-    # One run at a time: the path unit and the boot run can start together.
-    with open(os.path.join(config["BACKUP_DIR"], ".lock"), "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        recover(config, status, switch)
+    try:
+        os.makedirs(config["BACKUP_DIR"], mode=0o700, exist_ok=True)
+        lock = open(os.path.join(config["BACKUP_DIR"], ".lock"), "w")
+    except OSError:
+        not_started(config, status)
+    with lock:
+        try:
+            # One run at a time: the path unit and the boot run can start together. A run that holds the lock is waited
+            # for (it takes the request itself), never raced.
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            recover(config, status, switch)
+        except Exception:
+            not_started(config, status)
         if not os.path.lexists(os.path.join(config["REQUEST_DIR"], "request.json")):
             return
         cool_down(config)

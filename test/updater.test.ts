@@ -119,6 +119,20 @@ if args[:2] == ["image", "inspect"]:
 sys.exit(2)
 `;
 
+/**
+ * Runs the updater with its built-in folders (DEFAULTS) moved to the test's own: the cleanup of settings it can't trust
+ * only ever uses those, and a test must never touch the real /var/lib/fastmemo-update. Nothing else changes: main() runs
+ * as under systemd.
+ */
+const WITH_DEFAULTS = `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("fastmemo_updater", sys.argv[1])
+updater = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(updater)
+updater.DEFAULTS.update(json.loads(sys.argv[2]))
+updater.main()
+`;
+
 /** Stands in for the GitHub CLI: keeps its arguments and the token it saw, exits with GH_EXIT. */
 const GH_STUB = `#!/bin/sh
 printf '%s\\n' "$@" > "$STUB_STATE/gh.args"
@@ -157,7 +171,10 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
   after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
   let root: string;
-  let dirs: Record<"checkout" | "request" | "status" | "backup" | "data" | "etc" | "stub" | "bin", string>;
+  let dirs: Record<
+    "checkout" | "request" | "status" | "backup" | "data" | "etc" | "stub" | "bin" | "defaultRequest" | "defaultStatus",
+    string
+  >;
 
   beforeEach(() => {
     releases.clear();
@@ -174,6 +191,9 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
       etc: path.join(root, "etc"),
       stub: path.join(root, "stub"),
       bin: path.join(root, "bin"),
+      // What DEFAULTS' REQUEST_DIR and STATUS_DIR point at in these runs (see WITH_DEFAULTS).
+      defaultRequest: path.join(root, "default-request"),
+      defaultStatus: path.join(root, "default-status"),
     };
     for (const dir of Object.values(dirs)) fs.mkdirSync(dir);
     fs.mkdirSync(path.join(dirs.checkout, "contrib", "updater"), { recursive: true });
@@ -242,12 +262,13 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
   const withGh = () => fs.writeFileSync(path.join(dirs.bin, "gh"), GH_STUB, { mode: 0o755 });
 
   /** Async on purpose: the fake GitHub API lives in this process and must keep answering while Python runs. */
-  const startUpdater = (env: Record<string, string> = {}) => {
+  const startUpdater = (env: Record<string, string> = {}, { direct = false } = {}) => {
     let child: ChildProcess | undefined;
+    const defaults = JSON.stringify({ REQUEST_DIR: dirs.defaultRequest, STATUS_DIR: dirs.defaultStatus });
     const done = new Promise<{ code: number; stderr: string }>((resolve) => {
       child = execFile(
         PYTHON,
-        ["-I", UPDATER],
+        direct ? ["-I", UPDATER] : ["-I", "-c", WITH_DEFAULTS, UPDATER, defaults],
         {
           // Only what is given here: no GH_TOKEN or real docker/gh from the developer's environment.
           env: {
@@ -263,7 +284,7 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     });
     return { done, child: child as ChildProcess };
   };
-  const runUpdater = (env: Record<string, string> = {}) => startUpdater(env).done;
+  const runUpdater = (env: Record<string, string> = {}, options: { direct?: boolean } = {}) => startUpdater(env, options).done;
 
   const statusFile = () => path.join(dirs.status, "status.json");
   const status = () => JSON.parse(fs.readFileSync(statusFile(), "utf8"));
@@ -317,7 +338,8 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
   };
 
   test("does nothing without a request", async () => {
-    assert.equal((await runUpdater()).code, 0);
+    // Run as systemd runs it, with its own DEFAULTS.
+    assert.equal((await runUpdater({}, { direct: true })).code, 0);
     assert.equal(fs.existsSync(statusFile()), false);
     assert.deepEqual(calls(), []);
   });
@@ -334,12 +356,36 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     );
   };
 
-  test("refuses to run with a configuration others may write", async () => {
+  test("refuses to run with a configuration others may write, and never uses its folders", async () => {
+    // Anyone who may write the file may have picked its folders: only the built-in ones are cleaned up.
     fs.chmodSync(path.join(dirs.etc, "updater.env"), 0o664);
     request({ version: "1.2.0" });
+    fs.writeFileSync(path.join(dirs.defaultRequest, "request.json"), JSON.stringify({ version: "1.2.0" }));
     const result = await runUpdater();
+    assert.notEqual(result.code, 0);
     assert.match(result.stderr, /not writable by group or others/);
-    assertSettingsRefused(result);
+    assert.deepEqual(calls(), []);
+    assert.equal(requestLeft(), true);
+    assert.equal(fs.existsSync(statusFile()), false);
+    assert.equal(fs.existsSync(path.join(dirs.defaultRequest, "request.json")), false);
+    const written = JSON.parse(read(dirs.defaultStatus, "status.json"));
+    assert.deepEqual(
+      [written.state, written.version, written.message],
+      ["failed", "1.2.0", "the updater's settings are not valid: check its log (journalctl -u fastmemo-updater)"]
+    );
+  });
+
+  test("uses the folders of trusted settings only when they are real folders, not symlinks", async () => {
+    const elsewhere = path.join(root, "elsewhere");
+    fs.mkdirSync(elsewhere);
+    fs.writeFileSync(path.join(elsewhere, "request.json"), JSON.stringify({ version: "1.2.0" }));
+    const linked = path.join(root, "linked");
+    fs.symlinkSync(elsewhere, linked);
+    writeConfig({ REQUEST_DIR: linked, HEALTH_TIMEOUT: "soon" });
+    fs.writeFileSync(path.join(dirs.defaultRequest, "request.json"), JSON.stringify({ version: "1.2.0" }));
+    assert.notEqual((await runUpdater()).code, 0);
+    assert.equal(fs.existsSync(path.join(elsewhere, "request.json")), true);
+    assert.equal(fs.existsSync(path.join(dirs.defaultRequest, "request.json")), false);
   });
 
   test("refuses to run without the checkout it updates", async () => {
@@ -374,7 +420,24 @@ describe("updater", { skip: !PYTHON && "python3 is missing" }, () => {
     const result = await runUpdater();
     assert.notEqual(result.code, 0);
     assert.equal(fs.existsSync(statusFile()), false);
+    assert.equal(fs.existsSync(path.join(dirs.defaultStatus, "status.json")), false);
     assert.deepEqual(calls(), []);
+  });
+
+  test("a failure before it takes the request still takes it, and says so", async () => {
+    // A BACKUP_DIR it can't create (under a file): even root can't.
+    fs.writeFileSync(path.join(root, "a-file"), "");
+    writeConfig({ BACKUP_DIR: path.join(root, "a-file", "backup") });
+    request({ version: "1.2.0" });
+    const result = await runUpdater();
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /could not start/);
+    assert.deepEqual(calls(), []);
+    assert.equal(requestLeft(), false);
+    assert.deepEqual(
+      [status().state, status().version, status().message],
+      ["failed", "1.2.0", "the updater could not start: check its log (journalctl -u fastmemo-updater)"]
+    );
   });
 
   test("checks a newer release of the same major, then verifies the image it would switch to", async () => {

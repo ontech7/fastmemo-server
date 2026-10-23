@@ -211,7 +211,9 @@ device for a full sync** in the dashboard and the devices send them back.
   `systemctl status fastmemo-updater.path`, then `sudo journalctl -u fastmemo-updater`. A request left for over an hour no
   longer blocks: the next **Install** replaces it.
 - **"The updater's settings are not valid".** `updater.env` has a value it can't use, or a folder that isn't there: the journal
-  says which. It removed the request, so nothing runs again until you click **Install** once it is fixed.
+  says which. It removed the request, so nothing runs again until you click **Install** once it is fixed. A file others may
+  write is never followed, not even its folders: it only cleans up `/var/lib/fastmemo-update`. **"The updater could not start"**
+  is the same for a failure before it read the request (`BACKUP_DIR` can't be created, say): the journal says why.
 - **"Refused": started with other compose files than COMPOSE_FILE in updater.env.** `COMPOSE_FILE` in `updater.env` must name
   the files the server was started with, in `COMPOSE_DIR`
   (`docker inspect fastmemo-server --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}'` shows them).
